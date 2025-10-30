@@ -2,8 +2,10 @@ package cache
 
 import (
 	"testing"
+	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/monitor"
 )
 
 func TestMetaCacheFallback(t *testing.T) {
@@ -42,6 +44,63 @@ func TestMetaCacheClear(t *testing.T) {
 
 	if len(mc.cache) != 0 {
 		t.Errorf("Cache should be empty after Clear, got %d entries", len(mc.cache))
+	}
+}
+
+func TestTableNotFoundCache(t *testing.T) {
+	// 创建一个不存在的表缓存条目
+	tnc := &TableNotFoundCache{
+		timestamp: time.Now(),
+		ttl:       100 * time.Millisecond,
+	}
+
+	// 立即检查，应该未过期
+	if tnc.IsExpired() {
+		t.Errorf("Expected cache to be valid, but it's expired")
+	}
+
+	// 等待超时
+	time.Sleep(150 * time.Millisecond)
+
+	// 现在检查，应该已过期
+	if !tnc.IsExpired() {
+		t.Errorf("Expected cache to be expired, but it's valid")
+	}
+}
+
+func TestMetaCacheSetMonitor(t *testing.T) {
+	mc := NewMetaCache(nil, 100)
+	mon := monitor.NewMonitor(100*time.Millisecond, 0)
+
+	// 设置监控器
+	mc.SetMonitor(mon)
+
+	if mc.monitor != mon {
+		t.Errorf("Expected monitor to be set, but got %v", mc.monitor)
+	}
+}
+
+func TestClearNotFoundCache(t *testing.T) {
+	mc := NewMetaCache(nil, 100)
+
+	// 手动添加一个表不存在的缓存条目
+	key := "testdb.testtable"
+	mc.notFoundCache[key] = &TableNotFoundCache{
+		timestamp: time.Now(),
+		ttl:       1 * time.Minute,
+	}
+
+	// 验证缓存条目存在
+	if _, ok := mc.notFoundCache[key]; !ok {
+		t.Errorf("Expected to find cache entry for %s", key)
+	}
+
+	// 清空缓存
+	mc.Clear()
+
+	// 验证缓存被清空
+	if _, ok := mc.notFoundCache[key]; ok {
+		t.Errorf("Expected cache to be empty after Clear()")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/monitor"
 )
 
 // SQLGenerator SQL 生成器
@@ -16,10 +17,19 @@ type SQLGenerator struct {
 	// columnTypes 用于存储列类型信息（可选）
 	// 键为 "schema.table.columnName"
 	columnTypes map[string]DataType
+	monitor     *monitor.Monitor // 用于性能监控
 }
 
 // GenerateInsertSQL 生成 INSERT SQL
 func (sg *SQLGenerator) GenerateInsertSQL(event *models.Event) string {
+	start := time.Now()
+	defer func() {
+		if sg.monitor != nil {
+			duration := time.Since(start)
+			sg.monitor.LogSlowMethod("GenerateInsertSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+		}
+	}()
+
 	if event.Action != "INSERT" {
 		return ""
 	}
@@ -49,6 +59,14 @@ func (sg *SQLGenerator) GenerateInsertSQL(event *models.Event) string {
 
 // GenerateUpdateSQL 生成 UPDATE SQL
 func (sg *SQLGenerator) GenerateUpdateSQL(event *models.Event) string {
+	start := time.Now()
+	defer func() {
+		if sg.monitor != nil {
+			duration := time.Since(start)
+			sg.monitor.LogSlowMethod("GenerateUpdateSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+		}
+	}()
+
 	if event.Action != "UPDATE" {
 		return ""
 	}
@@ -81,6 +99,14 @@ func (sg *SQLGenerator) GenerateUpdateSQL(event *models.Event) string {
 
 // GenerateDeleteSQL 生成 DELETE SQL
 func (sg *SQLGenerator) GenerateDeleteSQL(event *models.Event) string {
+	start := time.Now()
+	defer func() {
+		if sg.monitor != nil {
+			duration := time.Since(start)
+			sg.monitor.LogSlowMethod("GenerateDeleteSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+		}
+	}()
+
 	if event.Action != "DELETE" {
 		return ""
 	}
@@ -377,7 +403,13 @@ func isPrintableString(s string) bool {
 func NewSQLGenerator() *SQLGenerator {
 	return &SQLGenerator{
 		columnTypes: make(map[string]DataType),
+		monitor:     nil,
 	}
+}
+
+// SetMonitor 设置监控器
+func (sg *SQLGenerator) SetMonitor(m *monitor.Monitor) {
+	sg.monitor = m
 }
 
 // SetColumnType 设置列的数据类型

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/filter"
 	"github.com/aitoooooo/binlogx/pkg/models"
@@ -111,6 +112,7 @@ func (ep *EventProcessor) producer() {
 
 		if event == nil {
 			// 暂时没有事件，继续尝试
+			time.Sleep(time.Second)
 			continue
 		}
 

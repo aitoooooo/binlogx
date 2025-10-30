@@ -4,16 +4,32 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/monitor"
 )
+
+// TableNotFoundCache 表示表不存在缓存条目
+type TableNotFoundCache struct {
+	timestamp time.Time
+	ttl       time.Duration
+}
+
+// IsExpired 检查缓存条目是否过期
+func (tnc *TableNotFoundCache) IsExpired() bool {
+	return time.Since(tnc.timestamp) > tnc.ttl
+}
 
 // MetaCache 表元数据缓存
 type MetaCache struct {
-	mu      sync.RWMutex
-	cache   map[string]*models.TableMeta
-	maxSize int
-	db      *sql.DB
+	mu                  sync.RWMutex
+	cache               map[string]*models.TableMeta
+	notFoundCache       map[string]*TableNotFoundCache // 表不存在的缓存，TTL=1分钟
+	maxSize             int
+	notFoundCacheTTL    time.Duration
+	db                  *sql.DB
+	monitor             *monitor.Monitor // 用于性能监控
 }
 
 // NewMetaCache 创建缓存
@@ -22,14 +38,30 @@ func NewMetaCache(db *sql.DB, maxSize int) *MetaCache {
 		maxSize = 10000
 	}
 	return &MetaCache{
-		cache:   make(map[string]*models.TableMeta),
-		maxSize: maxSize,
-		db:      db,
+		cache:            make(map[string]*models.TableMeta),
+		notFoundCache:    make(map[string]*TableNotFoundCache),
+		maxSize:          maxSize,
+		notFoundCacheTTL: 1 * time.Minute, // 表不存在缓存1分钟
+		db:               db,
+		monitor:          nil,
 	}
+}
+
+// SetMonitor 设置监控器
+func (mc *MetaCache) SetMonitor(m *monitor.Monitor) {
+	mc.monitor = m
 }
 
 // GetTableMeta 获取表元数据
 func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, error) {
+	start := time.Now()
+	defer func() {
+		if mc.monitor != nil {
+			duration := time.Since(start)
+			mc.monitor.LogSlowMethod("GetTableMeta", duration, fmt.Sprintf("schema=%s,table=%s", schema, table))
+		}
+	}()
+
 	if mc.db == nil {
 		// 无数据库连接，回退到默认列名
 		return nil, fmt.Errorf("no database connection available")
@@ -37,6 +69,15 @@ func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, erro
 
 	key := schema + "." + table
 
+	// 先检查表是否在不存在缓存中（在 1 分钟内不再查询）
+	mc.mu.RLock()
+	if nfc, ok := mc.notFoundCache[key]; ok && !nfc.IsExpired() {
+		mc.mu.RUnlock()
+		return nil, fmt.Errorf("table %s.%s not found (cached)", schema, table)
+	}
+	mc.mu.RUnlock()
+
+	// 检查表元数据缓存
 	mc.mu.RLock()
 	if meta, ok := mc.cache[key]; ok {
 		mc.mu.RUnlock()
@@ -47,6 +88,13 @@ func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, erro
 	// 从数据库查询
 	meta, err := mc.queryTableMeta(schema, table)
 	if err != nil {
+		// 表不存在，添加到不存在缓存，1 分钟内不再查询
+		mc.mu.Lock()
+		mc.notFoundCache[key] = &TableNotFoundCache{
+			timestamp: time.Now(),
+			ttl:       mc.notFoundCacheTTL,
+		}
+		mc.mu.Unlock()
 		return nil, err
 	}
 
@@ -125,4 +173,5 @@ func (mc *MetaCache) Clear() {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	mc.cache = make(map[string]*models.TableMeta)
+	mc.notFoundCache = make(map[string]*TableNotFoundCache)
 }
