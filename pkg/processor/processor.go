@@ -106,6 +106,13 @@ func (ep *EventProcessor) producer() {
 	for ep.dataSource.HasMore() {
 		event, err := ep.dataSource.Read()
 		if err != nil {
+			// 检查是否是 EOF 错误，EOF 是正常的结束信号，不需要打印错误日志
+			if err.Error() == "EOF" {
+				// 文件已读完，正常退出循环
+				log.Printf("reading event over: %v\n", err)
+				break
+			}
+			// 其他错误才记录日志
 			log.Printf("Error reading event: %v\n", err)
 			continue
 		}
