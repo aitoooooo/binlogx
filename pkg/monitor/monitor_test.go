@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -12,13 +11,15 @@ func TestLogSlowMethod(t *testing.T) {
 	monitor := NewMonitor(100*time.Millisecond, 0)
 
 	// 慢方法应该被计数
-	monitor.LogSlowMethod("slowFunc", 200*time.Millisecond, "arg1=test")
+	slowStart := time.Now().Add(-200 * time.Millisecond)
+	monitor.LogSlowMethod("slowFunc", slowStart, "arg1=test")
 	if monitor.slowMethodCount != 1 {
 		t.Errorf("Expected slowMethodCount to be 1, got %d", monitor.slowMethodCount)
 	}
 
 	// 快速方法不应该被计数
-	monitor.LogSlowMethod("fastFunc", 50*time.Millisecond, "arg1=test")
+	fastStart := time.Now().Add(-50 * time.Millisecond)
+	monitor.LogSlowMethod("fastFunc", fastStart, "arg1=test")
 	if monitor.slowMethodCount != 1 {
 		t.Errorf("Expected slowMethodCount to still be 1, got %d", monitor.slowMethodCount)
 	}
@@ -97,34 +98,6 @@ func TestCheckEventSizeBatch(t *testing.T) {
 	}
 	if monitor.maxEventSize != 200 {
 		t.Errorf("Expected maxEventSize to be 200, got %d", monitor.maxEventSize)
-	}
-}
-
-func TestTimeit(t *testing.T) {
-	monitor := NewMonitor(100*time.Millisecond, 0)
-
-	// 测试成功的函数
-	err := monitor.Timeit("testFunc", "arg=test", func() error {
-		time.Sleep(200 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if monitor.slowMethodCount != 1 {
-		t.Errorf("Expected slowMethodCount to be 1, got %d", monitor.slowMethodCount)
-	}
-
-	// 测试返回错误的函数
-	err = monitor.Timeit("errorFunc", "arg=test", func() error {
-		time.Sleep(200 * time.Millisecond)
-		return errors.New("test error")
-	})
-	if err == nil {
-		t.Errorf("Expected error, got nil")
-	}
-	if monitor.slowMethodCount != 2 {
-		t.Errorf("Expected slowMethodCount to be 2, got %d", monitor.slowMethodCount)
 	}
 }
 

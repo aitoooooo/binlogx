@@ -57,8 +57,7 @@ func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, erro
 	start := time.Now()
 	defer func() {
 		if mc.monitor != nil {
-			duration := time.Since(start)
-			mc.monitor.LogSlowMethod("GetTableMeta", duration, fmt.Sprintf("schema=%s,table=%s", schema, table))
+			mc.monitor.LogSlowMethod("GetTableMeta", start, fmt.Sprintf("schema=%s,table=%s", schema, table))
 		}
 	}()
 

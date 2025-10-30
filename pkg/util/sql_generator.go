@@ -25,8 +25,7 @@ func (sg *SQLGenerator) GenerateInsertSQL(event *models.Event) string {
 	start := time.Now()
 	defer func() {
 		if sg.monitor != nil {
-			duration := time.Since(start)
-			sg.monitor.LogSlowMethod("GenerateInsertSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+			sg.monitor.LogSlowMethod("GenerateInsertSQL", start, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
 		}
 	}()
 
@@ -62,8 +61,7 @@ func (sg *SQLGenerator) GenerateUpdateSQL(event *models.Event) string {
 	start := time.Now()
 	defer func() {
 		if sg.monitor != nil {
-			duration := time.Since(start)
-			sg.monitor.LogSlowMethod("GenerateUpdateSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+			sg.monitor.LogSlowMethod("GenerateUpdateSQL", start, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
 		}
 	}()
 
@@ -102,8 +100,7 @@ func (sg *SQLGenerator) GenerateDeleteSQL(event *models.Event) string {
 	start := time.Now()
 	defer func() {
 		if sg.monitor != nil {
-			duration := time.Since(start)
-			sg.monitor.LogSlowMethod("GenerateDeleteSQL", duration, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
+			sg.monitor.LogSlowMethod("GenerateDeleteSQL", start, fmt.Sprintf("db=%s,table=%s", event.Database, event.Table))
 		}
 	}()
 

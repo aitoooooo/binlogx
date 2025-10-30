@@ -27,9 +27,10 @@ func NewMonitor(slowThreshold time.Duration, eventSizeThreshold int64) *Monitor 
 	}
 }
 
-// LogSlowMethod 记录慢方法
+// LogSlowMethod 记录慢方法（计算从 startTime 开始的耗时）
 // 格式: [SLOW] 方法名 耗时 入参
-func (m *Monitor) LogSlowMethod(methodName string, duration time.Duration, args string) {
+func (m *Monitor) LogSlowMethod(methodName string, startTime time.Time, args string) {
+	duration := time.Since(startTime)
 	if duration > m.slowThreshold {
 		m.slowMethodCount++
 		log.Printf("[SLOW] %s took %v, args: %s\n", methodName, duration, args)
@@ -59,26 +60,6 @@ func (m *Monitor) CheckEventsSizeBatch(events []*models.Event) {
 	for _, event := range events {
 		m.CheckEventSize(event)
 	}
-}
-
-// Timeit 用于测量执行时间（适用于处理函数）
-// 记录执行时间并在超过阈值时输出日志
-func (m *Monitor) Timeit(methodName string, args string, fn func() error) error {
-	start := time.Now()
-	err := fn()
-	duration := time.Since(start)
-	m.LogSlowMethod(methodName, duration, args)
-	return err
-}
-
-// TimeitWithResult 用于测量执行时间并返回结果
-// 返回结果和错误，同时记录执行时间
-func (m *Monitor) TimeitWithResult(methodName string, args string, fn func() (interface{}, error)) (interface{}, error) {
-	start := time.Now()
-	result, err := fn()
-	duration := time.Since(start)
-	m.LogSlowMethod(methodName, duration, args)
-	return result, err
 }
 
 // GetStats 获取监控统计数据
