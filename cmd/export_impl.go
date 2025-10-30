@@ -8,17 +8,22 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/util"
 )
 
 // SQLiteExporter SQLite 导出器的完整实现
 type SQLiteExporter struct {
-	path   string
-	db     *sql.DB
-	helper *CommandHelper
-	mu     sync.Mutex
+	path         string
+	db           *sql.DB
+	helper       *CommandHelper
+	sqlGenerator *util.SQLGenerator
+	actions      map[string]bool
+	batch        []*models.Event
+	batchSize    int
+	mu           sync.Mutex
 }
 
-func newSQLiteExporter(output string, helper *CommandHelper) (*SQLiteExporter, error) {
+func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]bool) (*SQLiteExporter, error) {
 	// 处理输出路径
 	path := output
 	if path == "" {
@@ -30,6 +35,10 @@ func newSQLiteExporter(output string, helper *CommandHelper) (*SQLiteExporter, e
 	if err != nil {
 		return nil, err
 	}
+
+	// 优化 SQLite 性能
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	// 创建表
 	createTableSQL := `
@@ -56,9 +65,13 @@ func newSQLiteExporter(output string, helper *CommandHelper) (*SQLiteExporter, e
 	}
 
 	return &SQLiteExporter{
-		path:   path,
-		db:     db,
-		helper: helper,
+		path:         path,
+		db:           db,
+		helper:       helper,
+		sqlGenerator: util.NewSQLGenerator(),
+		actions:      actions,
+		batch:        make([]*models.Event, 0, 100),
+		batchSize:    100,
 	}, nil
 }
 
@@ -66,11 +79,46 @@ func (se *SQLiteExporter) Handle(event *models.Event) error {
 	se.mu.Lock()
 	defer se.mu.Unlock()
 
+	// 过滤：只导出指定的 action
+	if !se.actions[event.Action] {
+		return nil
+	}
+
 	// 映射列名：将 col_N 替换为实际列名
 	se.helper.MapColumnNames(event)
 
-	beforeJSON, _ := json.Marshal(event.BeforeValues)
-	afterJSON, _ := json.Marshal(event.AfterValues)
+	// 生成 SQL（此时列名已经映射为实际列名）
+	if event.Action != "QUERY" && event.Action != "" {
+		switch event.Action {
+		case "INSERT":
+			event.SQL = se.sqlGenerator.GenerateInsertSQL(event)
+		case "UPDATE":
+			event.SQL = se.sqlGenerator.GenerateUpdateSQL(event)
+		case "DELETE":
+			event.SQL = se.sqlGenerator.GenerateDeleteSQL(event)
+		}
+	}
+
+	// 添加到批处理队列
+	se.batch = append(se.batch, event)
+
+	// 当达到批处理大小时，执行批量插入
+	if len(se.batch) >= se.batchSize {
+		return se.flushBatch()
+	}
+
+	return nil
+}
+
+func (se *SQLiteExporter) flushBatch() error {
+	if len(se.batch) == 0 {
+		return nil
+	}
+
+	tx, err := se.db.Begin()
+	if err != nil {
+		return err
+	}
 
 	insertSQL := `
 	INSERT INTO binlog_events
@@ -78,26 +126,46 @@ func (se *SQLiteExporter) Handle(event *models.Event) error {
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := se.db.Exec(
-		insertSQL,
-		event.Timestamp,
-		event.EventType,
-		event.ServerID,
-		event.LogPos,
-		event.Database,
-		event.Table,
-		event.Action,
-		event.SQL,
-		string(beforeJSON),
-		string(afterJSON),
-	)
+	stmt, err := tx.Prepare(insertSQL)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
 
-	return err
+	for _, event := range se.batch {
+		beforeJSON, _ := json.Marshal(event.BeforeValues)
+		afterJSON, _ := json.Marshal(event.AfterValues)
+
+		if _, err := stmt.Exec(
+			event.Timestamp,
+			event.EventType,
+			event.ServerID,
+			event.LogPos,
+			event.Database,
+			event.Table,
+			event.Action,
+			event.SQL,
+			string(beforeJSON),
+			string(afterJSON),
+		); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	se.batch = se.batch[:0] // 清空批处理队列
+	return tx.Commit()
 }
 
 func (se *SQLiteExporter) Flush() error {
 	se.mu.Lock()
 	defer se.mu.Unlock()
+
+	// 刷新剩余的批处理数据
+	if err := se.flushBatch(); err != nil {
+		return err
+	}
 
 	// 输出统计信息
 	row := se.db.QueryRow("SELECT COUNT(*) FROM binlog_events")
@@ -111,18 +179,22 @@ func (se *SQLiteExporter) Flush() error {
 
 // H2Exporter H2 数据库导出器的完整实现
 type H2Exporter struct {
-	path   string
-	helper *CommandHelper
-	mu     sync.Mutex
+	path         string
+	helper       *CommandHelper
+	sqlGenerator *util.SQLGenerator
+	actions      map[string]bool
+	mu           sync.Mutex
 }
 
-func newH2Exporter(output string, helper *CommandHelper) (*H2Exporter, error) {
+func newH2Exporter(output string, helper *CommandHelper, actions map[string]bool) (*H2Exporter, error) {
 	if output == "" {
 		output = "binlog_export.h2"
 	}
 	return &H2Exporter{
-		path:   output,
-		helper: helper,
+		path:         output,
+		helper:       helper,
+		sqlGenerator: util.NewSQLGenerator(),
+		actions:      actions,
 	}, nil
 }
 
@@ -130,8 +202,25 @@ func (he *H2Exporter) Handle(event *models.Event) error {
 	he.mu.Lock()
 	defer he.mu.Unlock()
 
+	// 过滤：只导出指定的 action
+	if !he.actions[event.Action] {
+		return nil
+	}
+
 	// 映射列名：将 col_N 替换为实际列名
 	he.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时列名已经映射为实际列名）
+	if event.Action != "QUERY" && event.Action != "" {
+		switch event.Action {
+		case "INSERT":
+			event.SQL = he.sqlGenerator.GenerateInsertSQL(event)
+		case "UPDATE":
+			event.SQL = he.sqlGenerator.GenerateUpdateSQL(event)
+		case "DELETE":
+			event.SQL = he.sqlGenerator.GenerateDeleteSQL(event)
+		}
+	}
 
 	// TODO: 实现 H2 协议
 	// 这里仅作占位符实现
@@ -145,18 +234,22 @@ func (he *H2Exporter) Flush() error {
 
 // HiveExporter Hive 导出器的完整实现
 type HiveExporter struct {
-	path   string
-	helper *CommandHelper
-	mu     sync.Mutex
+	path         string
+	helper       *CommandHelper
+	sqlGenerator *util.SQLGenerator
+	actions      map[string]bool
+	mu           sync.Mutex
 }
 
-func newHiveExporter(output string, helper *CommandHelper) (*HiveExporter, error) {
+func newHiveExporter(output string, helper *CommandHelper, actions map[string]bool) (*HiveExporter, error) {
 	if output == "" {
 		output = "/hive/binlog_export"
 	}
 	return &HiveExporter{
-		path:   output,
-		helper: helper,
+		path:         output,
+		helper:       helper,
+		sqlGenerator: util.NewSQLGenerator(),
+		actions:      actions,
 	}, nil
 }
 
@@ -164,8 +257,25 @@ func (he *HiveExporter) Handle(event *models.Event) error {
 	he.mu.Lock()
 	defer he.mu.Unlock()
 
+	// 过滤：只导出指定的 action
+	if !he.actions[event.Action] {
+		return nil
+	}
+
 	// 映射列名：将 col_N 替换为实际列名
 	he.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时列名已经映射为实际列名）
+	if event.Action != "QUERY" && event.Action != "" {
+		switch event.Action {
+		case "INSERT":
+			event.SQL = he.sqlGenerator.GenerateInsertSQL(event)
+		case "UPDATE":
+			event.SQL = he.sqlGenerator.GenerateUpdateSQL(event)
+		case "DELETE":
+			event.SQL = he.sqlGenerator.GenerateDeleteSQL(event)
+		}
+	}
 
 	// TODO: 实现 Hive 分区表导出
 	// 可以按日期分区：/hive/binlog_export/date=2024-01-01/
@@ -179,18 +289,22 @@ func (he *HiveExporter) Flush() error {
 
 // ESExporter Elasticsearch 导出器的完整实现
 type ESExporter struct {
-	endpoint string
-	helper   *CommandHelper
-	mu       sync.Mutex
+	endpoint     string
+	helper       *CommandHelper
+	sqlGenerator *util.SQLGenerator
+	actions      map[string]bool
+	mu           sync.Mutex
 }
 
-func newESExporter(output string, helper *CommandHelper) (*ESExporter, error) {
+func newESExporter(output string, helper *CommandHelper, actions map[string]bool) (*ESExporter, error) {
 	if output == "" {
 		output = "http://localhost:9200"
 	}
 	return &ESExporter{
-		endpoint: output,
-		helper:   helper,
+		endpoint:     output,
+		helper:       helper,
+		sqlGenerator: util.NewSQLGenerator(),
+		actions:      actions,
 	}, nil
 }
 
@@ -198,8 +312,25 @@ func (ee *ESExporter) Handle(event *models.Event) error {
 	ee.mu.Lock()
 	defer ee.mu.Unlock()
 
+	// 过滤：只导出指定的 action
+	if !ee.actions[event.Action] {
+		return nil
+	}
+
 	// 映射列名：将 col_N 替换为实际列名
 	ee.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时列名已经映射为实际列名）
+	if event.Action != "QUERY" && event.Action != "" {
+		switch event.Action {
+		case "INSERT":
+			event.SQL = ee.sqlGenerator.GenerateInsertSQL(event)
+		case "UPDATE":
+			event.SQL = ee.sqlGenerator.GenerateUpdateSQL(event)
+		case "DELETE":
+			event.SQL = ee.sqlGenerator.GenerateDeleteSQL(event)
+		}
+	}
 
 	// TODO: 实现 Elasticsearch 索引导出
 	// 使用 github.com/elastic/go-elasticsearch
@@ -210,3 +341,4 @@ func (ee *ESExporter) Flush() error {
 	fmt.Printf("Elasticsearch export to %s completed\n", ee.endpoint)
 	return nil
 }
+

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/aitoooooo/binlogx/pkg/config"
@@ -12,6 +13,7 @@ import (
 	"github.com/aitoooooo/binlogx/pkg/models"
 	"github.com/aitoooooo/binlogx/pkg/processor"
 	"github.com/aitoooooo/binlogx/pkg/source"
+	"github.com/aitoooooo/binlogx/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -28,9 +30,26 @@ var exportCmd = &cobra.Command{
 
 		exportType, _ := cmd.Flags().GetString("type")
 		output, _ := cmd.Flags().GetString("output")
+		actionStr, _ := cmd.Flags().GetString("action")
 
-		if exportType == "" || output == "" {
-			return fmt.Errorf("--type and --output are required")
+		if exportType == "" {
+			return fmt.Errorf("--type is required")
+		}
+		if output == "" {
+			return fmt.Errorf("--output is required")
+		}
+
+		// 解析 action 过滤器
+		actions := make(map[string]bool)
+		if actionStr != "" {
+			for _, action := range strings.Split(actionStr, ",") {
+				actions[strings.TrimSpace(action)] = true
+			}
+		} else {
+			// 默认：INSERT, UPDATE, DELETE
+			actions["INSERT"] = true
+			actions["UPDATE"] = true
+			actions["DELETE"] = true
 		}
 
 		// 创建数据源
@@ -60,31 +79,31 @@ var exportCmd = &cobra.Command{
 		var exportHandler processor.EventHandler
 		switch exportType {
 		case "csv":
-			handler, err := newCSVExporter(output, helper)
+			handler, err := newCSVExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "sqlite":
-			handler, err := newSQLiteExporter(output, helper)
+			handler, err := newSQLiteExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "h2":
-			handler, err := newH2Exporter(output, helper)
+			handler, err := newH2Exporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "hive":
-			handler, err := newHiveExporter(output, helper)
+			handler, err := newHiveExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "es":
-			handler, err := newESExporter(output, helper)
+			handler, err := newESExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
@@ -109,13 +128,15 @@ var exportCmd = &cobra.Command{
 
 // CSVExporter CSV 导出器
 type CSVExporter struct {
-	file   *os.File
-	writer *csv.Writer
-	helper *CommandHelper
-	mu     sync.Mutex
+	file         *os.File
+	writer       *csv.Writer
+	helper       *CommandHelper
+	sqlGenerator *util.SQLGenerator
+	actions      map[string]bool
+	mu           sync.Mutex
 }
 
-func newCSVExporter(output string, helper *CommandHelper) (*CSVExporter, error) {
+func newCSVExporter(output string, helper *CommandHelper, actions map[string]bool) (*CSVExporter, error) {
 	// 处理输出路径
 	path := output
 	if stat, err := os.Stat(output); err == nil && stat.IsDir() {
@@ -129,9 +150,11 @@ func newCSVExporter(output string, helper *CommandHelper) (*CSVExporter, error) 
 
 	writer := csv.NewWriter(file)
 	exporter := &CSVExporter{
-		file:   file,
-		writer: writer,
-		helper: helper,
+		file:         file,
+		writer:       writer,
+		helper:       helper,
+		sqlGenerator: util.NewSQLGenerator(),
+		actions:      actions,
 	}
 
 	// 写入头
@@ -145,8 +168,25 @@ func (ce *CSVExporter) Handle(event *models.Event) error {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 
+	// 过滤：只导出指定的 action
+	if !ce.actions[event.Action] {
+		return nil
+	}
+
 	// 映射列名：将 col_N 替换为实际列名
 	ce.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时列名已经映射为实际列名）
+	if event.Action != "QUERY" && event.Action != "" {
+		switch event.Action {
+		case "INSERT":
+			event.SQL = ce.sqlGenerator.GenerateInsertSQL(event)
+		case "UPDATE":
+			event.SQL = ce.sqlGenerator.GenerateUpdateSQL(event)
+		case "DELETE":
+			event.SQL = ce.sqlGenerator.GenerateDeleteSQL(event)
+		}
+	}
 
 	record := []string{
 		event.Timestamp.String(),
@@ -170,6 +210,8 @@ func (ce *CSVExporter) Flush() error {
 }
 
 func init() {
-	exportCmd.Flags().StringP("type", "t", "", "导出介质：csv,sqlite,h2,hive,es (必填)")
+	exportCmd.Flags().StringP("type", "t", "csv", "导出介质：csv,sqlite,h2,hive,es (默认: csv)")
 	exportCmd.Flags().StringP("output", "o", "", "输出路径或连接串 (必填)")
+	exportCmd.Flags().StringP("action", "a", "INSERT,UPDATE,DELETE", "要导出的事件类型，以逗号分隔（默认: INSERT,UPDATE,DELETE）")
 }
+
