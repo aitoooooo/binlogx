@@ -71,6 +71,7 @@ type sqlHandler struct {
 	sqlGenerator *util.SQLGenerator
 	helper       *CommandHelper
 	mu           sync.Mutex
+	count        int
 }
 
 func (sh *sqlHandler) Handle(event *models.Event) error {
@@ -82,7 +83,11 @@ func (sh *sqlHandler) Handle(event *models.Event) error {
 		return nil
 	}
 
-	// 生成 SQL
+	// 重要：先映射列名，再生成 SQL
+	// 这样生成的 SQL 中列名是真实的，而不是 col_N
+	sh.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时列名已经映射为实际列名）
 	var sql string
 	switch event.Action {
 	case "INSERT":
@@ -95,11 +100,13 @@ func (sh *sqlHandler) Handle(event *models.Event) error {
 		return nil
 	}
 
-	// 映射列名：将 col_N 替换为实际列名
-	sh.helper.MapColumnNames(event)
-
 	if sql != "" {
+		// 输出注释标记事件信息
+		fmt.Printf("-- %s at %s (LogPos: %d)\n",
+			event.Action, event.Timestamp.Format("2006-01-02 15:04:05"), event.LogPos)
+		fmt.Printf("-- Database: %s, Table: %s\n", event.Database, event.Table)
 		fmt.Println(sql + ";")
+		sh.count++
 	}
 	return nil
 }

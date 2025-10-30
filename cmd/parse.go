@@ -19,18 +19,13 @@ import (
 
 var parseCmd = &cobra.Command{
 	Use:   "parse",
-	Short: "Interactively view binlog events",
-	Long:  "Parse and display binlog events in a paginated format",
+	Short: "Parse and display binlog events",
+	Long:  "Parse binlog events with streaming output and interactive paging",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// 初始化配置
 		cfg, err := config.InitConfig(cmd)
 		if err != nil {
 			return err
-		}
-
-		pageSize, _ := cmd.Flags().GetInt("page-size")
-		if pageSize <= 0 {
-			pageSize = 20
 		}
 
 		// 创建数据源
@@ -56,47 +51,54 @@ var parseCmd = &cobra.Command{
 		// 创建命令助手（包含列名缓存和映射功能）
 		helper := NewCommandHelper(cfg.DBConnection)
 
-		// 收集事件
-		parser := &parseHandler{
-			pageSize:     pageSize,
-			events:       make([]*models.Event, 0),
+		// 创建流式处理器 - 立即输出事件，不缓存
+		eventChan := make(chan *models.Event, 100)
+		parser := &streamParseHandler{
 			sqlGenerator: util.NewSQLGenerator(),
 			helper:       helper,
+			eventChan:    eventChan,
 		}
 
 		// 创建处理器
 		proc := processor.NewEventProcessor(ds, rf, cfg.Workers)
 		proc.AddHandler(parser)
 
-		// 启动处理
-		if err := proc.Start(); err != nil {
-			return err
-		}
+		// 在单独的 goroutine 中启动处理
+		go func() {
+			if err := proc.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error starting processor: %v\n", err)
+			}
+			if err := proc.Wait(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error waiting for processor: %v\n", err)
+			}
+			close(eventChan)
+		}()
 
-		// 等待完成
-		if err := proc.Wait(); err != nil {
-			return err
-		}
+		// 在主线程中交互式显示事件
+		displayEventsStreamingInteractive(eventChan)
 
-		// 交互式浏览
-		displayPaginatedEvents(parser.events, pageSize)
 		return nil
 	},
 }
 
-type parseHandler struct {
-	pageSize     int
-	events       []*models.Event
+// streamParseHandler 流式处理器：立即发送事件，不缓存
+type streamParseHandler struct {
 	sqlGenerator *util.SQLGenerator
 	helper       *CommandHelper
 	mu           sync.Mutex
+	eventChan    chan *models.Event
+	count        int
 }
 
-func (ph *parseHandler) Handle(event *models.Event) error {
+func (ph *streamParseHandler) Handle(event *models.Event) error {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
-	// 生成 SQL
+	// 重要：先映射列名，再生成 SQL
+	// 这样 AfterValues 和 BeforeValues 中的 col_N 会被替换为实际列名
+	ph.helper.MapColumnNames(event)
+
+	// 生成 SQL（此时 AfterValues 已经有实际列名了）
 	if event.Action != "QUERY" {
 		switch event.Action {
 		case "INSERT":
@@ -106,65 +108,56 @@ func (ph *parseHandler) Handle(event *models.Event) error {
 		case "DELETE":
 			event.SQL = ph.sqlGenerator.GenerateDeleteSQL(event)
 		}
-
-		// 映射列名：将 col_N 替换为实际列名
-		ph.helper.MapColumnNames(event)
 	}
 
-	ph.events = append(ph.events, event)
+	ph.count++
+
+	// 立即发送到输出通道
+	select {
+	case ph.eventChan <- event:
+	default:
+		// 通道满了，阻塞发送
+		ph.eventChan <- event
+	}
+
 	return nil
 }
 
-func (ph *parseHandler) Flush() error {
+func (ph *streamParseHandler) Flush() error {
 	return nil
 }
 
-func displayPaginatedEvents(events []*models.Event, pageSize int) {
-	if len(events) == 0 {
-		fmt.Println("No events found")
-		return
-	}
-
-	totalPages := (len(events) + pageSize - 1) / pageSize
-	currentPage := 0
+// displayEventsStreamingInteractive 交互式显示流式事件，逐个输出，按空格继续
+func displayEventsStreamingInteractive(eventChan chan *models.Event) {
 	reader := bufio.NewReader(os.Stdin)
+	eventCount := 0
 
-	for {
-		// 显示当前页
-		start := currentPage * pageSize
-		end := start + pageSize
-		if end > len(events) {
-			end = len(events)
+	for event := range eventChan {
+		if event == nil {
+			continue
 		}
 
-		fmt.Printf("\n=== Page %d/%d ===\n", currentPage+1, totalPages)
-		for i, event := range events[start:end] {
-			data, _ := json.MarshalIndent(event, "", "  ")
-			fmt.Printf("[%d] %s\n", start+i+1, string(data))
-		}
+		eventCount++
 
-		if currentPage == totalPages-1 {
-			fmt.Println("(End of results)")
-			break
-		}
+		// 显示当前事件
+		data, _ := json.MarshalIndent(event, "", "  ")
+		fmt.Printf("\n[Event %d]\n%s\n", eventCount, string(data))
 
-		// 改进的交互提示：支持空格或 n 翻页
-		fmt.Print("Press SPACE or 'n' for next page, 'q' to quit: ")
+		// 提示用户，等待空格继续
+		fmt.Print("Press SPACE/Enter for next, 'q' to quit: ")
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 
 		if input == "q" || input == "Q" {
+			fmt.Println("Exiting...")
 			break
-		} else if input == "n" || input == "N" || input == "" {
-			// 空字符串表示按 Enter（对应空格或直接回车）
-			currentPage++
-			if currentPage >= totalPages {
-				currentPage = totalPages - 1
-			}
 		}
 	}
+
+	fmt.Fprintf(os.Stderr, "\n[DEBUG] Total events displayed: %d\n", eventCount)
 }
 
+
 func init() {
-	parseCmd.Flags().IntP("page-size", "p", 20, "每页事件数，默认 20")
+	parseCmd.Flags().IntP("page-size", "p", 20, "页面大小 (已弃用，现在逐个显示)")
 }

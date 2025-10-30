@@ -96,12 +96,15 @@ func (fs *FileSource) Close() error {
 func (fs *FileSource) Read() (*models.Event, error) {
 	fs.mu.RLock()
 	eof := fs.eof
+	hasEvents := len(fs.eventChan) > 0
 	fs.mu.RUnlock()
 
-	if eof && len(fs.eventChan) == 0 {
+	// 如果已到文件末尾且没有缓冲事件，直接返回错误
+	if eof && !hasEvents {
 		return nil, fmt.Errorf("EOF")
 	}
 
+	// 非阻塞读取：先尝试从 eventChan 读取
 	select {
 	case event, ok := <-fs.eventChan:
 		if !ok {
@@ -113,6 +116,27 @@ func (fs *FileSource) Read() (*models.Event, error) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("EOF")
+	default:
+		// 没有立即可用的事件
+		if eof {
+			return nil, fmt.Errorf("EOF")
+		}
+		// 让出 CPU，短暂等待事件到达
+		select {
+		case event, ok := <-fs.eventChan:
+			if !ok {
+				return nil, fmt.Errorf("EOF")
+			}
+			return fs.convertEvent(event)
+		case err := <-fs.errChan:
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("EOF")
+		case <-time.After(100 * time.Millisecond):
+			// 超时仍未收到事件，返回 nil 而不是继续阻塞
+			return nil, nil
+		}
 	}
 }
 

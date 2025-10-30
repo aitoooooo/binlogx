@@ -110,6 +110,7 @@ func (ep *EventProcessor) producer() {
 		}
 
 		if event == nil {
+			// 暂时没有事件，继续尝试
 			continue
 		}
 
