@@ -53,35 +53,38 @@ var exportCmd = &cobra.Command{
 			return err
 		}
 
+		// 创建命令助手（包含列名缓存和映射功能）
+		helper := NewCommandHelper(cfg.DBConnection)
+
 		// 创建导出处理器
 		var exportHandler processor.EventHandler
 		switch exportType {
 		case "csv":
-			handler, err := newCSVExporter(output)
+			handler, err := newCSVExporter(output, helper)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "sqlite":
-			handler, err := newSQLiteExporter(output)
+			handler, err := newSQLiteExporter(output, helper)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "h2":
-			handler, err := newH2Exporter(output)
+			handler, err := newH2Exporter(output, helper)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "hive":
-			handler, err := newHiveExporter(output)
+			handler, err := newHiveExporter(output, helper)
 			if err != nil {
 				return err
 			}
 			exportHandler = handler
 		case "es":
-			handler, err := newESExporter(output)
+			handler, err := newESExporter(output, helper)
 			if err != nil {
 				return err
 			}
@@ -108,10 +111,11 @@ var exportCmd = &cobra.Command{
 type CSVExporter struct {
 	file   *os.File
 	writer *csv.Writer
+	helper *CommandHelper
 	mu     sync.Mutex
 }
 
-func newCSVExporter(output string) (*CSVExporter, error) {
+func newCSVExporter(output string, helper *CommandHelper) (*CSVExporter, error) {
 	// 处理输出路径
 	path := output
 	if stat, err := os.Stat(output); err == nil && stat.IsDir() {
@@ -127,6 +131,7 @@ func newCSVExporter(output string) (*CSVExporter, error) {
 	exporter := &CSVExporter{
 		file:   file,
 		writer: writer,
+		helper: helper,
 	}
 
 	// 写入头
@@ -139,6 +144,9 @@ func newCSVExporter(output string) (*CSVExporter, error) {
 func (ce *CSVExporter) Handle(event *models.Event) error {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
+
+	// 映射列名：将 col_N 替换为实际列名
+	ce.helper.MapColumnNames(event)
 
 	record := []string{
 		event.Timestamp.String(),

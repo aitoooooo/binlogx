@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/aitoooooo/binlogx/pkg/models"
@@ -11,11 +12,13 @@ import (
 
 // SQLiteExporter SQLite 导出器的完整实现
 type SQLiteExporter struct {
-	path string
-	db   *sql.DB
+	path   string
+	db     *sql.DB
+	helper *CommandHelper
+	mu     sync.Mutex
 }
 
-func newSQLiteExporter(output string) (*SQLiteExporter, error) {
+func newSQLiteExporter(output string, helper *CommandHelper) (*SQLiteExporter, error) {
 	// 处理输出路径
 	path := output
 	if path == "" {
@@ -53,12 +56,19 @@ func newSQLiteExporter(output string) (*SQLiteExporter, error) {
 	}
 
 	return &SQLiteExporter{
-		path: path,
-		db:   db,
+		path:   path,
+		db:     db,
+		helper: helper,
 	}, nil
 }
 
 func (se *SQLiteExporter) Handle(event *models.Event) error {
+	se.mu.Lock()
+	defer se.mu.Unlock()
+
+	// 映射列名：将 col_N 替换为实际列名
+	se.helper.MapColumnNames(event)
+
 	beforeJSON, _ := json.Marshal(event.BeforeValues)
 	afterJSON, _ := json.Marshal(event.AfterValues)
 
@@ -86,6 +96,9 @@ func (se *SQLiteExporter) Handle(event *models.Event) error {
 }
 
 func (se *SQLiteExporter) Flush() error {
+	se.mu.Lock()
+	defer se.mu.Unlock()
+
 	// 输出统计信息
 	row := se.db.QueryRow("SELECT COUNT(*) FROM binlog_events")
 	var count int
@@ -98,17 +111,28 @@ func (se *SQLiteExporter) Flush() error {
 
 // H2Exporter H2 数据库导出器的完整实现
 type H2Exporter struct {
-	path string
+	path   string
+	helper *CommandHelper
+	mu     sync.Mutex
 }
 
-func newH2Exporter(output string) (*H2Exporter, error) {
+func newH2Exporter(output string, helper *CommandHelper) (*H2Exporter, error) {
 	if output == "" {
 		output = "binlog_export.h2"
 	}
-	return &H2Exporter{path: output}, nil
+	return &H2Exporter{
+		path:   output,
+		helper: helper,
+	}, nil
 }
 
 func (he *H2Exporter) Handle(event *models.Event) error {
+	he.mu.Lock()
+	defer he.mu.Unlock()
+
+	// 映射列名：将 col_N 替换为实际列名
+	he.helper.MapColumnNames(event)
+
 	// TODO: 实现 H2 协议
 	// 这里仅作占位符实现
 	return nil
@@ -121,17 +145,28 @@ func (he *H2Exporter) Flush() error {
 
 // HiveExporter Hive 导出器的完整实现
 type HiveExporter struct {
-	path string
+	path   string
+	helper *CommandHelper
+	mu     sync.Mutex
 }
 
-func newHiveExporter(output string) (*HiveExporter, error) {
+func newHiveExporter(output string, helper *CommandHelper) (*HiveExporter, error) {
 	if output == "" {
 		output = "/hive/binlog_export"
 	}
-	return &HiveExporter{path: output}, nil
+	return &HiveExporter{
+		path:   output,
+		helper: helper,
+	}, nil
 }
 
 func (he *HiveExporter) Handle(event *models.Event) error {
+	he.mu.Lock()
+	defer he.mu.Unlock()
+
+	// 映射列名：将 col_N 替换为实际列名
+	he.helper.MapColumnNames(event)
+
 	// TODO: 实现 Hive 分区表导出
 	// 可以按日期分区：/hive/binlog_export/date=2024-01-01/
 	return nil
@@ -145,16 +180,27 @@ func (he *HiveExporter) Flush() error {
 // ESExporter Elasticsearch 导出器的完整实现
 type ESExporter struct {
 	endpoint string
+	helper   *CommandHelper
+	mu       sync.Mutex
 }
 
-func newESExporter(output string) (*ESExporter, error) {
+func newESExporter(output string, helper *CommandHelper) (*ESExporter, error) {
 	if output == "" {
 		output = "http://localhost:9200"
 	}
-	return &ESExporter{endpoint: output}, nil
+	return &ESExporter{
+		endpoint: output,
+		helper:   helper,
+	}, nil
 }
 
 func (ee *ESExporter) Handle(event *models.Event) error {
+	ee.mu.Lock()
+	defer ee.mu.Unlock()
+
+	// 映射列名：将 col_N 替换为实际列名
+	ee.helper.MapColumnNames(event)
+
 	// TODO: 实现 Elasticsearch 索引导出
 	// 使用 github.com/elastic/go-elasticsearch
 	return nil

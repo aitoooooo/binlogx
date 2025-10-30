@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/aitoooooo/binlogx/pkg/config"
 	"github.com/aitoooooo/binlogx/pkg/filter"
 	"github.com/aitoooooo/binlogx/pkg/models"
 	"github.com/aitoooooo/binlogx/pkg/processor"
 	"github.com/aitoooooo/binlogx/pkg/source"
+	"github.com/aitoooooo/binlogx/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -42,8 +44,14 @@ var sqlCmd = &cobra.Command{
 			return err
 		}
 
+		// 创建命令助手（包含列名缓存和映射功能）
+		helper := NewCommandHelper(cfg.DBConnection)
+
 		// 处理器
-		sqlHandler := &sqlHandler{}
+		sqlHandler := &sqlHandler{
+			sqlGenerator: util.NewSQLGenerator(),
+			helper:       helper,
+		}
 
 		// 创建处理器
 		proc := processor.NewEventProcessor(ds, rf, cfg.Workers)
@@ -60,31 +68,42 @@ var sqlCmd = &cobra.Command{
 }
 
 type sqlHandler struct {
+	sqlGenerator *util.SQLGenerator
+	helper       *CommandHelper
+	mu           sync.Mutex
 }
 
 func (sh *sqlHandler) Handle(event *models.Event) error {
-	// 输出 SQL 语句
-	if event.SQL != "" {
-		fmt.Println(event.SQL + ";")
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+
+	// QUERY 事件不处理
+	if event.Action == "QUERY" {
+		return nil
+	}
+
+	// 生成 SQL
+	var sql string
+	switch event.Action {
+	case "INSERT":
+		sql = sh.sqlGenerator.GenerateInsertSQL(event)
+	case "UPDATE":
+		sql = sh.sqlGenerator.GenerateUpdateSQL(event)
+	case "DELETE":
+		sql = sh.sqlGenerator.GenerateDeleteSQL(event)
+	default:
+		return nil
+	}
+
+	// 映射列名：将 col_N 替换为实际列名
+	sh.helper.MapColumnNames(event)
+
+	if sql != "" {
+		fmt.Println(sql + ";")
 	}
 	return nil
 }
 
 func (sh *sqlHandler) Flush() error {
 	return nil
-}
-
-func generateForwardSQL(event *models.Event) string {
-	// TODO: 根据事件类型生成 SQL
-	// 这里是简化的实现
-	switch event.Action {
-	case "INSERT":
-		return fmt.Sprintf("-- INSERT event: %s.%s", event.Database, event.Table)
-	case "UPDATE":
-		return fmt.Sprintf("-- UPDATE event: %s.%s", event.Database, event.Table)
-	case "DELETE":
-		return fmt.Sprintf("-- DELETE event: %s.%s", event.Database, event.Table)
-	default:
-		return ""
-	}
 }

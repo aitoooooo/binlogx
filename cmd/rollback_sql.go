@@ -9,6 +9,7 @@ import (
 	"github.com/aitoooooo/binlogx/pkg/models"
 	"github.com/aitoooooo/binlogx/pkg/processor"
 	"github.com/aitoooooo/binlogx/pkg/source"
+	"github.com/aitoooooo/binlogx/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -45,10 +46,15 @@ var rollbackSqlCmd = &cobra.Command{
 			return err
 		}
 
+		// 创建命令助手（包含列名缓存和映射功能）
+		helper := NewCommandHelper(cfg.DBConnection)
+
 		// 处理器
 		rollbackHandler := &rollbackSqlHandler{
-			bulk:   bulk,
-			buffer: make([]string, 0),
+			bulk:         bulk,
+			buffer:       make([]string, 0),
+			sqlGenerator: util.NewSQLGenerator(),
+			helper:       helper,
 		}
 
 		// 创建处理器
@@ -66,19 +72,30 @@ var rollbackSqlCmd = &cobra.Command{
 }
 
 type rollbackSqlHandler struct {
-	bulk   bool
-	buffer []string
-	mu     sync.Mutex
+	bulk         bool
+	buffer       []string
+	sqlGenerator *util.SQLGenerator
+	helper       *CommandHelper
+	mu           sync.Mutex
 }
 
 func (rsh *rollbackSqlHandler) Handle(event *models.Event) error {
-	sql := generateRollbackSQL(event)
-	if sql == "" {
+	rsh.mu.Lock()
+	defer rsh.mu.Unlock()
+
+	// QUERY 事件不处理
+	if event.Action == "QUERY" {
 		return nil
 	}
 
-	rsh.mu.Lock()
-	defer rsh.mu.Unlock()
+	// 映射列名：将 col_N 替换为实际列名
+	rsh.helper.MapColumnNames(event)
+
+	// 生成回滚 SQL
+	sql := generateRollbackSQL(event, rsh.sqlGenerator)
+	if sql == "" {
+		return nil
+	}
 
 	if rsh.bulk {
 		rsh.buffer = append(rsh.buffer, sql)
@@ -102,19 +119,27 @@ func (rsh *rollbackSqlHandler) Flush() error {
 	return nil
 }
 
-func generateRollbackSQL(event *models.Event) string {
-	// TODO: 生成反向 SQL
-	// 这里是简化的实现
+// generateRollbackSQL 生成回滚 SQL
+func generateRollbackSQL(event *models.Event, sqlGenerator *util.SQLGenerator) string {
 	switch event.Action {
 	case "INSERT":
 		// INSERT 的回滚是 DELETE
-		return fmt.Sprintf("-- ROLLBACK DELETE for: %s.%s", event.Database, event.Table)
+		return sqlGenerator.GenerateDeleteSQL(event)
 	case "UPDATE":
-		// UPDATE 的回滚是 UPDATE（使用 beforeValues）
-		return fmt.Sprintf("-- ROLLBACK UPDATE for: %s.%s", event.Database, event.Table)
+		// UPDATE 的回滚是 UPDATE（使用 BeforeValues）
+		// 创建临时事件用于生成回滚 SQL
+		rollbackEvent := &models.Event{
+			Database: event.Database,
+			Table:    event.Table,
+			Action:   "UPDATE",
+			// 将 BeforeValues 和 AfterValues 互换
+			BeforeValues: event.AfterValues,
+			AfterValues:  event.BeforeValues,
+		}
+		return sqlGenerator.GenerateUpdateSQL(rollbackEvent)
 	case "DELETE":
 		// DELETE 的回滚是 INSERT
-		return fmt.Sprintf("-- ROLLBACK INSERT for: %s.%s", event.Database, event.Table)
+		return sqlGenerator.GenerateInsertSQL(event)
 	default:
 		return ""
 	}
