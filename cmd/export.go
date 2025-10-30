@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/config"
 	"github.com/aitoooooo/binlogx/pkg/filter"
@@ -16,6 +18,157 @@ import (
 	"github.com/aitoooooo/binlogx/pkg/util"
 	"github.com/spf13/cobra"
 )
+
+// ProgressTracker 进度跟踪器
+type ProgressTracker struct {
+	processed   int64
+	exported    int64
+	filtered    int64
+	startTime   time.Time
+	lastTime    time.Time
+	lastCount   int64
+	stopChan    chan struct{}
+	mu          sync.Mutex
+}
+
+func NewProgressTracker() *ProgressTracker {
+	return &ProgressTracker{
+		startTime: time.Now(),
+		lastTime:  time.Now(),
+		stopChan:  make(chan struct{}),
+	}
+}
+
+func (pt *ProgressTracker) Start() {
+	// 每分钟打印一次进度
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				pt.PrintProgress()
+			case <-pt.stopChan:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func (pt *ProgressTracker) Stop() {
+	close(pt.stopChan)
+}
+
+func (pt *ProgressTracker) AddProcessed(count int64) {
+	atomic.AddInt64(&pt.processed, count)
+}
+
+func (pt *ProgressTracker) AddExported(count int64) {
+	atomic.AddInt64(&pt.exported, count)
+}
+
+func (pt *ProgressTracker) AddFiltered(count int64) {
+	atomic.AddInt64(&pt.filtered, count)
+}
+
+func (pt *ProgressTracker) PrintProgress() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(pt.startTime)
+	currentProcessed := atomic.LoadInt64(&pt.processed)
+	currentExported := atomic.LoadInt64(&pt.exported)
+	currentFiltered := atomic.LoadInt64(&pt.filtered)
+
+	// 计算速率 (events/sec)
+	timeSinceLastCheck := now.Sub(pt.lastTime).Seconds()
+	eventsSinceLastCheck := currentProcessed - pt.lastCount
+	ratePerSec := float64(eventsSinceLastCheck) / timeSinceLastCheck
+
+	pt.lastTime = now
+	pt.lastCount = currentProcessed
+
+	// 格式化输出
+	fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 已处理: %d | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec\n",
+		pt.formatDuration(elapsed),
+		currentProcessed,
+		currentExported,
+		currentFiltered,
+		ratePerSec,
+	)
+}
+
+func (pt *ProgressTracker) PrintSummary() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	elapsed := time.Now().Sub(pt.startTime)
+	processed := atomic.LoadInt64(&pt.processed)
+	exported := atomic.LoadInt64(&pt.exported)
+	filtered := atomic.LoadInt64(&pt.filtered)
+
+	avgRate := float64(processed) / elapsed.Seconds()
+
+	fmt.Fprintf(os.Stderr, "\n[完成] 总耗时: %s\n", pt.formatDuration(elapsed))
+	fmt.Fprintf(os.Stderr, "[统计] 已处理: %d | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
+		processed,
+		exported,
+		filtered,
+		avgRate,
+	)
+}
+
+func (pt *ProgressTracker) formatDuration(d time.Duration) string {
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+// ProgressWrappedHandler 包装的导出处理器，用于跟踪进度
+type ProgressWrappedHandler struct {
+	inner      processor.EventHandler
+	tracker    *ProgressTracker
+	actions    map[string]bool
+}
+
+func NewProgressWrappedHandler(inner processor.EventHandler, tracker *ProgressTracker, actions map[string]bool) *ProgressWrappedHandler {
+	return &ProgressWrappedHandler{
+		inner:   inner,
+		tracker: tracker,
+		actions: actions,
+	}
+}
+
+func (pwh *ProgressWrappedHandler) Handle(event *models.Event) error {
+	// 计数已处理的事件
+	pwh.tracker.AddProcessed(1)
+
+	// 检查是否被过滤
+	if !pwh.actions[event.Action] {
+		pwh.tracker.AddFiltered(1)
+		return nil
+	}
+
+	// 交由实际处理器处理
+	err := pwh.inner.Handle(event)
+	if err == nil {
+		pwh.tracker.AddExported(1)
+	}
+	return err
+}
+
+func (pwh *ProgressWrappedHandler) Flush() error {
+	return pwh.inner.Flush()
+}
 
 var exportCmd = &cobra.Command{
 	Use:   "export",
@@ -75,6 +228,12 @@ var exportCmd = &cobra.Command{
 		// 创建命令助手（包含列名缓存和映射功能）
 		helper := NewCommandHelper(cfg.DBConnection)
 
+		// 创建进度跟踪器
+		tracker := NewProgressTracker()
+		tracker.Start()
+		defer tracker.Stop()
+		defer tracker.PrintSummary()
+
 		// 创建导出处理器
 		var exportHandler processor.EventHandler
 		switch exportType {
@@ -83,31 +242,31 @@ var exportCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			exportHandler = handler
+			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "sqlite":
 			handler, err := newSQLiteExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
-			exportHandler = handler
+			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "h2":
 			handler, err := newH2Exporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
-			exportHandler = handler
+			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "hive":
 			handler, err := newHiveExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
-			exportHandler = handler
+			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "es":
 			handler, err := newESExporter(output, helper, actions)
 			if err != nil {
 				return err
 			}
-			exportHandler = handler
+			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		default:
 			return fmt.Errorf("unsupported export type: %s", exportType)
 		}
@@ -214,4 +373,5 @@ func init() {
 	exportCmd.Flags().StringP("output", "o", "", "输出路径或连接串 (必填)")
 	exportCmd.Flags().StringP("action", "a", "INSERT,UPDATE,DELETE", "要导出的事件类型，以逗号分隔（默认: INSERT,UPDATE,DELETE）")
 }
+
 
