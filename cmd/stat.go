@@ -16,7 +16,7 @@ import (
 var statCmd = &cobra.Command{
 	Use:   "stat",
 	Short: "Show binlog statistics",
-	Long:  "Show total events, database/table/action distribution",
+	Long:  "Show total events, database/table/action distribution, and large event analysis",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// 初始化配置
 		cfg, err := config.InitConfig(cmd)
@@ -49,10 +49,12 @@ var statCmd = &cobra.Command{
 		// 统计
 		stat := &statHandler{
 			result: &models.StatResult{
-				DatabaseDist: make(map[string]int64),
-				TableDist:    make(map[string]int64),
-				ActionDist:   make(map[string]int64),
+				DatabaseDist:   make(map[string]int64),
+				TableDist:      make(map[string]int64),
+				ActionDist:     make(map[string]int64),
+				LargeEventDist: make(map[string]int64),
 			},
+			eventSizeThreshold: cfg.EventSizeThreshold,
 		}
 
 		// 创建处理器
@@ -76,8 +78,9 @@ var statCmd = &cobra.Command{
 }
 
 type statHandler struct {
-	result *models.StatResult
-	mu     sync.Mutex
+	result                 *models.StatResult
+	mu                     sync.Mutex
+	eventSizeThreshold     int64
 }
 
 func (sh *statHandler) Handle(event *models.Event) error {
@@ -86,8 +89,23 @@ func (sh *statHandler) Handle(event *models.Event) error {
 
 	sh.result.TotalEvents++
 	sh.result.DatabaseDist[event.Database]++
-	sh.result.TableDist[event.Database+"."+event.Table]++
+	tableKey := event.Database + "." + event.Table
+	sh.result.TableDist[tableKey]++
 	sh.result.ActionDist[event.Action]++
+
+	// 检查是否是大事件
+	eventSize := int64(len(event.RawData))
+	if eventSize > sh.eventSizeThreshold {
+		sh.result.LargeEvents++
+		sh.result.LargeEventDist[tableKey]++
+	}
+
+	// 跟踪最大事件
+	if eventSize > sh.result.MaxEventSize {
+		sh.result.MaxEventSize = eventSize
+		sh.result.MaxEventTable = tableKey
+	}
+
 	return nil
 }
 
@@ -106,6 +124,19 @@ func printStatResult(result *models.StatResult, top int) {
 
 	fmt.Println("\n=== Action Distribution ===")
 	printDist(result.ActionDist, top)
+
+	// 大事件统计
+	fmt.Printf("\n=== Large Event Analysis ===\n")
+	fmt.Printf("Large Events (> %d bytes): %d\n", 1024, result.LargeEvents)
+	fmt.Printf("Max Event Size: %d bytes\n", result.MaxEventSize)
+	if result.MaxEventTable != "" {
+		fmt.Printf("Max Event Table: %s\n", result.MaxEventTable)
+	}
+
+	if result.LargeEvents > 0 {
+		fmt.Println("\nLarge Event Distribution:")
+		printDist(result.LargeEventDist, top)
+	}
 }
 
 func printDist(dist map[string]int64, top int) {

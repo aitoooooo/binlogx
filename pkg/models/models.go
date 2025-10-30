@@ -27,8 +27,8 @@ type GlobalConfig struct {
 	StartTime     time.Time     // 开始时间
 	EndTime       time.Time     // 结束时间
 	Action        []string      // 操作类型过滤
-	SlowThreshold time.Duration // 慢方法阈值，默认 1s
-	EventSizeThreshold int64     // 事件大小阈值（字节），默认 0（不检测）
+	SlowThreshold time.Duration // 慢事件处理阈值，默认 50ms
+	EventSizeThreshold int64     // 事件大小阈值（字节），默认 1KiB=1024字节
 
 	// 分库表正则路由
 	DBRegex        string   // 分库正则
@@ -54,10 +54,14 @@ type GlobalConfig struct {
 
 // StatResult 统计结果
 type StatResult struct {
-	TotalEvents   int64
-	DatabaseDist  map[string]int64
-	TableDist     map[string]int64
-	ActionDist    map[string]int64
+	TotalEvents     int64
+	DatabaseDist    map[string]int64
+	TableDist       map[string]int64
+	ActionDist      map[string]int64
+	LargeEvents     int64                     // 大事件数（超过 event-size-threshold）
+	LargeEventDist  map[string]int64          // 大事件分布（table -> count）
+	MaxEventSize    int64                     // 最大事件大小（字节）
+	MaxEventTable   string                    // 最大事件对应的表
 }
 
 // ColumnMeta 列元数据
