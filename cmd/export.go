@@ -24,6 +24,7 @@ type ProgressTracker struct {
 	processed   int64
 	exported    int64
 	filtered    int64
+	totalEvents int64 // 总事件数（用于显示进度百分比）
 	startTime   time.Time
 	lastTime    time.Time
 	lastCount   int64
@@ -37,6 +38,10 @@ func NewProgressTracker() *ProgressTracker {
 		lastTime:  time.Now(),
 		stopChan:  make(chan struct{}),
 	}
+}
+
+func (pt *ProgressTracker) SetTotalEvents(total int64) {
+	atomic.StoreInt64(&pt.totalEvents, total)
 }
 
 func (pt *ProgressTracker) Start() {
@@ -80,6 +85,7 @@ func (pt *ProgressTracker) PrintProgress() {
 	currentProcessed := atomic.LoadInt64(&pt.processed)
 	currentExported := atomic.LoadInt64(&pt.exported)
 	currentFiltered := atomic.LoadInt64(&pt.filtered)
+	totalEvents := atomic.LoadInt64(&pt.totalEvents)
 
 	// 计算速率 (events/sec)
 	timeSinceLastCheck := now.Sub(pt.lastTime).Seconds()
@@ -89,14 +95,38 @@ func (pt *ProgressTracker) PrintProgress() {
 	pt.lastTime = now
 	pt.lastCount = currentProcessed
 
-	// 格式化输出
-	fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 已处理: %d | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec\n",
-		pt.formatDuration(elapsed),
-		currentProcessed,
-		currentExported,
-		currentFiltered,
-		ratePerSec,
-	)
+	// 格式化输出 - 如果有总数，显示百分比
+	if totalEvents > 0 {
+		percentage := float64(currentProcessed) * 100.0 / float64(totalEvents)
+		// 估计剩余时间
+		remainingEvents := totalEvents - currentProcessed
+		var etaStr string
+		if ratePerSec > 0 {
+			remainingSeconds := float64(remainingEvents) / ratePerSec
+			etaStr = pt.formatDuration(time.Duration(remainingSeconds) * time.Second)
+		} else {
+			etaStr = "未知"
+		}
+		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 进度: %.1f%% (%d/%d) | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec | ETA: %s\n",
+			pt.formatDuration(elapsed),
+			percentage,
+			currentProcessed,
+			totalEvents,
+			currentExported,
+			currentFiltered,
+			ratePerSec,
+			etaStr,
+		)
+	} else {
+		// 没有总数，只显示绝对值
+		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 已处理: %d | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec\n",
+			pt.formatDuration(elapsed),
+			currentProcessed,
+			currentExported,
+			currentFiltered,
+			ratePerSec,
+		)
+	}
 }
 
 func (pt *ProgressTracker) PrintSummary() {
@@ -107,16 +137,30 @@ func (pt *ProgressTracker) PrintSummary() {
 	processed := atomic.LoadInt64(&pt.processed)
 	exported := atomic.LoadInt64(&pt.exported)
 	filtered := atomic.LoadInt64(&pt.filtered)
+	totalEvents := atomic.LoadInt64(&pt.totalEvents)
 
 	avgRate := float64(processed) / elapsed.Seconds()
 
 	fmt.Fprintf(os.Stderr, "\n[完成] 总耗时: %s\n", pt.formatDuration(elapsed))
-	fmt.Fprintf(os.Stderr, "[统计] 已处理: %d | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
-		processed,
-		exported,
-		filtered,
-		avgRate,
-	)
+
+	if totalEvents > 0 {
+		percentage := float64(processed) * 100.0 / float64(totalEvents)
+		fmt.Fprintf(os.Stderr, "[统计] 进度: %.1f%% (%d/%d) | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
+			percentage,
+			processed,
+			totalEvents,
+			exported,
+			filtered,
+			avgRate,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr, "[统计] 已处理: %d | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
+			processed,
+			exported,
+			filtered,
+			avgRate,
+		)
+	}
 }
 
 func (pt *ProgressTracker) formatDuration(d time.Duration) string {
@@ -135,9 +179,9 @@ func (pt *ProgressTracker) formatDuration(d time.Duration) string {
 
 // ProgressWrappedHandler 包装的导出处理器，用于跟踪进度
 type ProgressWrappedHandler struct {
-	inner      processor.EventHandler
-	tracker    *ProgressTracker
-	actions    map[string]bool
+	inner   processor.EventHandler
+	tracker *ProgressTracker
+	actions map[string]bool
 }
 
 func NewProgressWrappedHandler(inner processor.EventHandler, tracker *ProgressTracker, actions map[string]bool) *ProgressWrappedHandler {
@@ -230,6 +274,59 @@ var exportCmd = &cobra.Command{
 
 		// 创建进度跟踪器
 		tracker := NewProgressTracker()
+
+		// 如果启用了 --estimate-total，先扫描一遍计算总事件数
+		estimateTotal, _ := cmd.Flags().GetBool("estimate-total")
+		if estimateTotal {
+			fmt.Fprintf(os.Stderr, "[预扫描] 正在统计总事件数，请稍候...\n")
+
+			// 创建一个简单的空处理器，只用来计数
+			nullHandler := &nullEventHandler{}
+			countHandlerImpl := &ProgressWrappedHandler{
+				inner:   nullHandler,
+				tracker: &ProgressTracker{}, // 临时的，不用显示进度
+				actions: actions,
+			}
+
+			// 创建临时处理器来计数
+			proc := processor.NewEventProcessor(ds, rf, cfg.Workers)
+			proc.AddHandler(countHandlerImpl)
+
+			// 启动扫描
+			if err := proc.Start(); err != nil {
+				return err
+			}
+
+			// 等待完成
+			if err := proc.Wait(); err != nil {
+				return err
+			}
+
+			// 获取处理的事件数
+			totalCount := atomic.LoadInt64(&countHandlerImpl.tracker.processed)
+			fmt.Fprintf(os.Stderr, "[预扫描] 总事件数: %d\n", totalCount)
+
+			// 重新打开数据源用于实际导出
+			ds.Close()
+			if cfg.Source != "" {
+				ds = source.NewFileSource(cfg.Source)
+			} else {
+				ds = source.NewMySQLSource(cfg.DBConnection)
+			}
+			if err := ds.Open(cmd.Context()); err != nil {
+				return err
+			}
+
+			// 重新创建过滤器
+			rf, err = filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+			if err != nil {
+				return err
+			}
+
+			// 设置总数
+			tracker.SetTotalEvents(totalCount)
+		}
+
 		tracker.Start()
 		defer tracker.Stop()
 		defer tracker.PrintSummary()
@@ -368,10 +465,20 @@ func (ce *CSVExporter) Flush() error {
 	return ce.file.Close()
 }
 
+// nullEventHandler 空事件处理器，用于预扫描计数
+type nullEventHandler struct{}
+
+func (neh *nullEventHandler) Handle(event *models.Event) error {
+	return nil
+}
+
+func (neh *nullEventHandler) Flush() error {
+	return nil
+}
+
 func init() {
 	exportCmd.Flags().StringP("type", "t", "csv", "导出介质：csv,sqlite,h2,hive,es (默认: csv)")
 	exportCmd.Flags().StringP("output", "o", "", "输出路径或连接串 (必填)")
 	exportCmd.Flags().StringP("action", "a", "INSERT,UPDATE,DELETE", "要导出的事件类型，以逗号分隔（默认: INSERT,UPDATE,DELETE）")
+	exportCmd.Flags().BoolP("estimate-total", "e", false, "在导出前快速扫描统计总事件数，以便显示更准确的进度百分比 (默认: false)")
 }
-
-
