@@ -157,24 +157,21 @@ Total Events: 1234567
 
 ### parse - 交互式浏览
 
-分页显示 binlog 事件详情
+逐个显示 binlog 事件详情，支持交互式控制
 
 ```bash
 binlogx parse [options]
 ```
 
-**选项**：
+**特性**：
+- 流式输出：事件一经解析即刻显示，无需等待完整文件处理
+- 交互式分页：每个事件显示后等待用户操作
+- 实时列名映射：通过 `--db-connection` 将列名 `col_N` 映射为实际名称
+- 完整事件信息：JSON 格式输出，包含所有元数据和生成的 SQL
 
-#### `--page-size` int, `-p`
-每页显示的事件数，默认 `20`
-
-```bash
-binlogx parse --source file.binlog --page-size 50
-```
-
-**交互**：
-- `n` - 下一页
-- `q` - 退出
+**交互方式**：
+- 按 `空格` 或 `Enter` 显示下一个事件
+- 按 `q` 退出浏览
 
 ### sql - 生成前向 SQL
 

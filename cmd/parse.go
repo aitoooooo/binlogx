@@ -158,6 +158,3 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event) {
 }
 
 
-func init() {
-	parseCmd.Flags().IntP("page-size", "p", 20, "页面大小 (已弃用，现在逐个显示)")
-}
