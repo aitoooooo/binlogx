@@ -43,7 +43,7 @@ var parseCmd = &cobra.Command{
 		defer ds.Close()
 
 		// 创建过滤器
-		rf, err := filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+		rf, err := filter.NewRouteFilter(cfg.SchemaTableRegex)
 		if err != nil {
 			return err
 		}
@@ -54,7 +54,7 @@ var parseCmd = &cobra.Command{
 		// 创建流式处理器 - 立即输出事件，不缓存
 		eventChan := make(chan *models.Event, 100)
 		parser := &streamParseHandler{
-			sqlGenerator: util.NewSQLGenerator(),
+			sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 			helper:       helper,
 			eventChan:    eventChan,
 		}
@@ -156,5 +156,3 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event) {
 
 	fmt.Fprintf(os.Stderr, "\n[DEBUG] Total events displayed: %d\n", eventCount)
 }
-
-

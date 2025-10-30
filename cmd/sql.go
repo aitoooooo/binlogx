@@ -39,7 +39,7 @@ var sqlCmd = &cobra.Command{
 		defer ds.Close()
 
 		// 创建过滤器
-		rf, err := filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+		rf, err := filter.NewRouteFilter(cfg.SchemaTableRegex)
 		if err != nil {
 			return err
 		}
@@ -49,7 +49,7 @@ var sqlCmd = &cobra.Command{
 
 		// 处理器
 		sqlHandler := &sqlHandler{
-			sqlGenerator: util.NewSQLGenerator(),
+			sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 			helper:       helper,
 		}
 

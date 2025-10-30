@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/aitoooooo/binlogx/pkg/config"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/aitoooooo/binlogx/pkg/models"
 	"github.com/aitoooooo/binlogx/pkg/util"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // SQLiteExporter SQLite 导出器的完整实现
@@ -68,7 +69,7 @@ func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]
 		path:         path,
 		db:           db,
 		helper:       helper,
-		sqlGenerator: util.NewSQLGenerator(),
+		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
 		batch:        make([]*models.Event, 0, 100),
 		batchSize:    100,
@@ -193,7 +194,7 @@ func newH2Exporter(output string, helper *CommandHelper, actions map[string]bool
 	return &H2Exporter{
 		path:         output,
 		helper:       helper,
-		sqlGenerator: util.NewSQLGenerator(),
+		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
 	}, nil
 }
@@ -248,7 +249,7 @@ func newHiveExporter(output string, helper *CommandHelper, actions map[string]bo
 	return &HiveExporter{
 		path:         output,
 		helper:       helper,
-		sqlGenerator: util.NewSQLGenerator(),
+		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
 	}, nil
 }
@@ -303,7 +304,7 @@ func newESExporter(output string, helper *CommandHelper, actions map[string]bool
 	return &ESExporter{
 		endpoint:     output,
 		helper:       helper,
-		sqlGenerator: util.NewSQLGenerator(),
+		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
 	}, nil
 }
@@ -341,4 +342,3 @@ func (ee *ESExporter) Flush() error {
 	fmt.Printf("Elasticsearch export to %s completed\n", ee.endpoint)
 	return nil
 }
-

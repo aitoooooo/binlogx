@@ -10,7 +10,7 @@ import (
 )
 
 func TestGenerateInsertSQL(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	event := &models.Event{
 		Database: "testdb",
@@ -34,7 +34,7 @@ func TestGenerateInsertSQL(t *testing.T) {
 }
 
 func TestGenerateUpdateSQL(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	event := &models.Event{
 		Database: "testdb",
@@ -60,7 +60,7 @@ func TestGenerateUpdateSQL(t *testing.T) {
 }
 
 func TestGenerateDeleteSQL(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	event := &models.Event{
 		Database: "testdb",
@@ -83,7 +83,7 @@ func TestGenerateDeleteSQL(t *testing.T) {
 }
 
 func TestGenerateRollbackSQL(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	// INSERT 的回滚应该是 DELETE
 	insertEvent := &models.Event{
@@ -114,7 +114,7 @@ func TestGenerateRollbackSQL(t *testing.T) {
 
 // 测试复杂数据类型支持
 func TestComplexDataTypes(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	tests := []struct {
 		name     string
@@ -137,8 +137,8 @@ func TestComplexDataTypes(t *testing.T) {
 		{"float64_float", float64(123.45), "123.45"},
 		{"float64_scientific", float64(1.23e-4), "0.000123"},
 		{"string", "hello", "'hello'"},
-		{"string_with_quote", "it's", "'"},  // Just check it has quotes
-		{"string_with_backslash", "test\\path", "'"},  // Just check it has quotes
+		{"string_with_quote", "it's", "'"},           // Just check it has quotes
+		{"string_with_backslash", "test\\path", "'"}, // Just check it has quotes
 		{"empty_string", "", "''"},
 		{"bool_true", true, "1"},
 		{"bool_false", false, "0"},
@@ -160,7 +160,7 @@ func TestComplexDataTypes(t *testing.T) {
 
 // 测试特殊浮点数情况
 func TestSpecialFloatValues(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	tests := []struct {
 		name     string
@@ -186,7 +186,7 @@ func TestSpecialFloatValues(t *testing.T) {
 
 // 测试 SQL 验证
 func TestValidateSQL(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	tests := []struct {
 		sql      string
@@ -212,7 +212,7 @@ func TestValidateSQL(t *testing.T) {
 
 // 测试特殊字符转义
 func TestEscaping(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	tests := []struct {
 		input    string
@@ -240,21 +240,21 @@ func TestEscaping(t *testing.T) {
 
 // 测试复杂 INSERT 场景
 func TestComplexInsertWithVariousTypes(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	event := &models.Event{
 		Database: "mydb",
 		Table:    "complex_table",
 		Action:   "INSERT",
 		AfterValues: map[string]interface{}{
-			"id":        1,
-			"name":      "test",
-			"balance":   123.45,
-			"active":    true,
-			"data":      map[string]interface{}{"nested": "value"},
-			"created":   time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC),
-			"amount":    0,
-			"nullable":  nil,
+			"id":       1,
+			"name":     "test",
+			"balance":  123.45,
+			"active":   true,
+			"data":     map[string]interface{}{"nested": "value"},
+			"created":  time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC),
+			"amount":   0,
+			"nullable": nil,
 		},
 	}
 
@@ -282,7 +282,7 @@ func TestComplexInsertWithVariousTypes(t *testing.T) {
 
 // 测试 UPDATE 与复杂类型
 func TestComplexUpdateWithDateTime(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	now := time.Now()
 	event := &models.Event{
@@ -311,7 +311,7 @@ func TestComplexUpdateWithDateTime(t *testing.T) {
 
 // 测试 DeleteSQL 与多个 WHERE 条件
 func TestDeleteWithMultipleConditions(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	event := &models.Event{
 		Database: "testdb",
@@ -340,7 +340,7 @@ func TestDeleteWithMultipleConditions(t *testing.T) {
 
 // 测试 Column Type 管理
 func TestColumnTypeManagement(t *testing.T) {
-	gen := NewSQLGenerator()
+	gen := NewSQLGenerator(nil)
 
 	// 设置列类型
 	gen.SetColumnType("mydb", "users", "id", TypeInt)

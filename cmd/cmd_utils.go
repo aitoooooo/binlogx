@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aitoooooo/binlogx/pkg/cache"
+	"github.com/aitoooooo/binlogx/pkg/config"
 	"github.com/aitoooooo/binlogx/pkg/models"
 )
 
@@ -18,7 +19,7 @@ func NewCommandHelper(dbConnection string) *CommandHelper {
 	var metaCache *cache.MetaCache
 	if dbConnection != "" {
 		if db, err := sql.Open("mysql", dbConnection); err == nil {
-			metaCache = cache.NewMetaCache(db, 10000)
+			metaCache = cache.NewMetaCache(db, 10000, config.GlobalMonitor)
 		}
 	}
 	return &CommandHelper{

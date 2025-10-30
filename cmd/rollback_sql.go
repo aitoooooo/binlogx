@@ -41,7 +41,7 @@ var rollbackSqlCmd = &cobra.Command{
 		defer ds.Close()
 
 		// 创建过滤器
-		rf, err := filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+		rf, err := filter.NewRouteFilter(cfg.SchemaTableRegex)
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ var rollbackSqlCmd = &cobra.Command{
 		rollbackHandler := &rollbackSqlHandler{
 			bulk:         bulk,
 			buffer:       make([]string, 0),
-			sqlGenerator: util.NewSQLGenerator(),
+			sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 			helper:       helper,
 		}
 

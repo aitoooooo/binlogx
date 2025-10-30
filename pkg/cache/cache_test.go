@@ -10,7 +10,7 @@ import (
 
 func TestMetaCacheFallback(t *testing.T) {
 	// 无数据库连接时，缓存应该返回回退列名
-	mc := NewMetaCache(nil, 100)
+	mc := NewMetaCache(nil, 100, nil)
 
 	colName := mc.GetColumnName("testdb", "testtable", 5)
 	expected := "col_5"
@@ -21,7 +21,7 @@ func TestMetaCacheFallback(t *testing.T) {
 }
 
 func TestMetaCacheSize(t *testing.T) {
-	mc := NewMetaCache(nil, 2)
+	mc := NewMetaCache(nil, 2, nil)
 
 	// 测试 LRU 缓存限制
 	mc.cache["db1.table1"] = &models.TableMeta{Columns: []models.ColumnMeta{{Name: "col1", Type: "INT"}}}
@@ -33,7 +33,7 @@ func TestMetaCacheSize(t *testing.T) {
 }
 
 func TestMetaCacheClear(t *testing.T) {
-	mc := NewMetaCache(nil, 100)
+	mc := NewMetaCache(nil, 100, nil)
 	mc.cache["db1.table1"] = &models.TableMeta{Columns: []models.ColumnMeta{{Name: "col1", Type: "INT"}}}
 
 	if len(mc.cache) == 0 {
@@ -69,7 +69,7 @@ func TestTableNotFoundCache(t *testing.T) {
 }
 
 func TestMetaCacheSetMonitor(t *testing.T) {
-	mc := NewMetaCache(nil, 100)
+	mc := NewMetaCache(nil, 100, nil)
 	mon := monitor.NewMonitor(100*time.Millisecond, 0)
 
 	// 设置监控器
@@ -81,7 +81,7 @@ func TestMetaCacheSetMonitor(t *testing.T) {
 }
 
 func TestClearNotFoundCache(t *testing.T) {
-	mc := NewMetaCache(nil, 100)
+	mc := NewMetaCache(nil, 100, nil)
 
 	// 手动添加一个表不存在的缓存条目
 	key := "testdb.testtable"
@@ -103,4 +103,3 @@ func TestClearNotFoundCache(t *testing.T) {
 		t.Errorf("Expected cache to be empty after Clear()")
 	}
 }
-

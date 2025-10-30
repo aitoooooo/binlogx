@@ -2,14 +2,17 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/monitor"
 	"github.com/spf13/cobra"
 )
 
 var GlobalConfig *models.GlobalConfig
+var GlobalMonitor *monitor.Monitor
 
 func InitConfig(cmd *cobra.Command) (*models.GlobalConfig, error) {
 	cfg := &models.GlobalConfig{}
@@ -61,10 +64,7 @@ func InitConfig(cmd *cobra.Command) (*models.GlobalConfig, error) {
 	cfg.EventSizeThreshold = eventSizeThreshold
 
 	// 分库表正则
-	cfg.DBRegex, _ = cmd.Flags().GetString("db-regex")
-	cfg.TableRegex, _ = cmd.Flags().GetString("table-regex")
-	cfg.IncludeDB, _ = cmd.Flags().GetStringSlice("include-db")
-	cfg.IncludeTable, _ = cmd.Flags().GetStringSlice("include-table")
+	cfg.SchemaTableRegex, _ = cmd.Flags().GetStringSlice("schema-table-regex")
 
 	// Worker 数量
 	workers, _ := cmd.Flags().GetInt("workers")
@@ -74,6 +74,11 @@ func InitConfig(cmd *cobra.Command) (*models.GlobalConfig, error) {
 	cfg.Workers = workers
 
 	GlobalConfig = cfg
+
+	// 创建全局 Monitor 对象
+	GlobalMonitor = monitor.NewMonitor(cfg.SlowThreshold, cfg.EventSizeThreshold)
+
+	log.Printf("config : %+v", cfg)
 	return cfg, nil
 }
 
@@ -85,9 +90,6 @@ func AddGlobalFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringSlice("action", []string{}, "操作类型过滤 (INSERT,UPDATE,DELETE)")
 	cmd.PersistentFlags().String("slow-threshold", "50ms", "慢事件处理阈值，超过此时间则标记为慢事件（默认 50ms）")
 	cmd.PersistentFlags().Int64("event-size-threshold", 1024, "大事件大小阈值（字节），超过此大小则标记为大事件（默认 1KiB=1024字节）")
-	cmd.PersistentFlags().String("db-regex", "", "分库正则 例 db_[0-3]")
-	cmd.PersistentFlags().String("table-regex", "", "分表正则 例 table_[0-15]")
-	cmd.PersistentFlags().StringSlice("include-db", []string{}, "精确库列表")
-	cmd.PersistentFlags().StringSlice("include-table", []string{}, "精确表列表")
+	cmd.PersistentFlags().StringSlice("schema-table-regex", []string{}, "schema.table 的正则表达式。示例 *.my_table 或者 db_[0-3].my_table_[0-9]")
 	cmd.PersistentFlags().Int("workers", 0, "worker 数量，默认 0=CPU 数")
 }

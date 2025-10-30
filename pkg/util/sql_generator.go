@@ -397,16 +397,11 @@ func isPrintableString(s string) bool {
 }
 
 // NewSQLGenerator 创建 SQL 生成器
-func NewSQLGenerator() *SQLGenerator {
+func NewSQLGenerator(m *monitor.Monitor) *SQLGenerator {
 	return &SQLGenerator{
 		columnTypes: make(map[string]DataType),
-		monitor:     nil,
+		monitor:     m,
 	}
-}
-
-// SetMonitor 设置监控器
-func (sg *SQLGenerator) SetMonitor(m *monitor.Monitor) {
-	sg.monitor = m
 }
 
 // SetColumnType 设置列的数据类型

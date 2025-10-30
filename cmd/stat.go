@@ -41,7 +41,7 @@ var statCmd = &cobra.Command{
 		defer ds.Close()
 
 		// 创建过滤器
-		rf, err := filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+		rf, err := filter.NewRouteFilter(cfg.SchemaTableRegex)
 		if err != nil {
 			return err
 		}
@@ -78,9 +78,9 @@ var statCmd = &cobra.Command{
 }
 
 type statHandler struct {
-	result                 *models.StatResult
-	mu                     sync.Mutex
-	eventSizeThreshold     int64
+	result             *models.StatResult
+	mu                 sync.Mutex
+	eventSizeThreshold int64
 }
 
 func (sh *statHandler) Handle(event *models.Event) error {

@@ -23,7 +23,6 @@ import (
 type ProgressTracker struct {
 	processed   int64
 	exported    int64
-	filtered    int64
 	totalEvents int64 // 总事件数（用于显示进度百分比）
 	startTime   time.Time
 	lastTime    time.Time
@@ -72,10 +71,6 @@ func (pt *ProgressTracker) AddExported(count int64) {
 	atomic.AddInt64(&pt.exported, count)
 }
 
-func (pt *ProgressTracker) AddFiltered(count int64) {
-	atomic.AddInt64(&pt.filtered, count)
-}
-
 func (pt *ProgressTracker) PrintProgress() {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -84,7 +79,6 @@ func (pt *ProgressTracker) PrintProgress() {
 	elapsed := now.Sub(pt.startTime)
 	currentProcessed := atomic.LoadInt64(&pt.processed)
 	currentExported := atomic.LoadInt64(&pt.exported)
-	currentFiltered := atomic.LoadInt64(&pt.filtered)
 	totalEvents := atomic.LoadInt64(&pt.totalEvents)
 
 	// 计算速率 (events/sec)
@@ -107,23 +101,21 @@ func (pt *ProgressTracker) PrintProgress() {
 		} else {
 			etaStr = "未知"
 		}
-		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 进度: %.1f%% (%d/%d) | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec | ETA: %s\n",
+		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 进度: %.1f%% (%d/%d) | 已导出: %d | 速率: %.1f events/sec | ETA: %s\n",
 			pt.formatDuration(elapsed),
 			percentage,
 			currentProcessed,
 			totalEvents,
 			currentExported,
-			currentFiltered,
 			ratePerSec,
 			etaStr,
 		)
 	} else {
 		// 没有总数，只显示绝对值
-		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 已处理: %d | 已导出: %d | 已过滤: %d | 速率: %.1f events/sec\n",
+		fmt.Fprintf(os.Stderr, "\n[进度] 耗时: %s | 已处理: %d | 已导出: %d | 速率: %.1f events/sec\n",
 			pt.formatDuration(elapsed),
 			currentProcessed,
 			currentExported,
-			currentFiltered,
 			ratePerSec,
 		)
 	}
@@ -136,7 +128,6 @@ func (pt *ProgressTracker) PrintSummary() {
 	elapsed := time.Now().Sub(pt.startTime)
 	processed := atomic.LoadInt64(&pt.processed)
 	exported := atomic.LoadInt64(&pt.exported)
-	filtered := atomic.LoadInt64(&pt.filtered)
 	totalEvents := atomic.LoadInt64(&pt.totalEvents)
 
 	avgRate := float64(processed) / elapsed.Seconds()
@@ -145,19 +136,17 @@ func (pt *ProgressTracker) PrintSummary() {
 
 	if totalEvents > 0 {
 		percentage := float64(processed) * 100.0 / float64(totalEvents)
-		fmt.Fprintf(os.Stderr, "[统计] 进度: %.1f%% (%d/%d) | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
+		fmt.Fprintf(os.Stderr, "[统计] 进度: %.1f%% (%d/%d) | 已导出: %d | 平均速率: %.1f events/sec\n",
 			percentage,
 			processed,
 			totalEvents,
 			exported,
-			filtered,
 			avgRate,
 		)
 	} else {
-		fmt.Fprintf(os.Stderr, "[统计] 已处理: %d | 已导出: %d | 已过滤: %d | 平均速率: %.1f events/sec\n",
+		fmt.Fprintf(os.Stderr, "[统计] 已处理: %d | 已导出: %d | 平均速率: %.1f events/sec\n",
 			processed,
 			exported,
-			filtered,
 			avgRate,
 		)
 	}
@@ -195,12 +184,6 @@ func NewProgressWrappedHandler(inner processor.EventHandler, tracker *ProgressTr
 func (pwh *ProgressWrappedHandler) Handle(event *models.Event) error {
 	// 计数已处理的事件
 	pwh.tracker.AddProcessed(1)
-
-	// 检查是否被过滤
-	if !pwh.actions[event.Action] {
-		pwh.tracker.AddFiltered(1)
-		return nil
-	}
 
 	// 交由实际处理器处理
 	err := pwh.inner.Handle(event)
@@ -264,7 +247,7 @@ var exportCmd = &cobra.Command{
 		defer ds.Close()
 
 		// 创建过滤器
-		rf, err := filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
+		rf, err := filter.NewRouteFilter(cfg.SchemaTableRegex)
 		if err != nil {
 			return err
 		}
@@ -314,12 +297,6 @@ var exportCmd = &cobra.Command{
 				ds = source.NewMySQLSource(cfg.DBConnection)
 			}
 			if err := ds.Open(cmd.Context()); err != nil {
-				return err
-			}
-
-			// 重新创建过滤器
-			rf, err = filter.NewRouteFilter(cfg.IncludeDB, cfg.IncludeTable, cfg.DBRegex, cfg.TableRegex)
-			if err != nil {
 				return err
 			}
 
@@ -409,7 +386,7 @@ func newCSVExporter(output string, helper *CommandHelper, actions map[string]boo
 		file:         file,
 		writer:       writer,
 		helper:       helper,
-		sqlGenerator: util.NewSQLGenerator(),
+		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
 	}
 

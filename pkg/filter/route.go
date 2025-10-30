@@ -1,63 +1,37 @@
 package filter
 
 import (
-	"regexp"
-
+	"fmt"
 	"github.com/aitoooooo/binlogx/pkg/models"
+	"github.com/aitoooooo/binlogx/pkg/util"
 )
 
 // RouteFilter 分库表正则路由过滤器
 type RouteFilter struct {
-	includeDB   map[string]bool
-	includeTable map[string]bool
-	dbRegex     *regexp.Regexp
-	tableRegex  *regexp.Regexp
+	rangeMatcher []*util.RangeMatcher
 }
 
 // NewRouteFilter 创建路由过滤器
-func NewRouteFilter(includeDB, includeTable []string, dbRegexStr, tableRegexStr string) (*RouteFilter, error) {
-	rf := &RouteFilter{
-		includeDB:   make(map[string]bool),
-		includeTable: make(map[string]bool),
-	}
+func NewRouteFilter(schemaTableRegexStr []string) (*RouteFilter, error) {
+	rf := &RouteFilter{}
 
-	// 精确列表
-	for _, db := range includeDB {
-		rf.includeDB[db] = true
-	}
-	for _, table := range includeTable {
-		rf.includeTable[table] = true
-	}
+	if len(schemaTableRegexStr) != 0 {
+		for _, s := range schemaTableRegexStr {
+			re, err := util.NewRangeMatcher(s)
+			if err != nil {
+				return nil, err
+			}
 
-	// 正则表达式
-	if dbRegexStr != "" {
-		re, err := regexp.Compile(dbRegexStr)
-		if err != nil {
-			return nil, err
+			rf.rangeMatcher = append(rf.rangeMatcher, re)
 		}
-		rf.dbRegex = re
 	}
-
-	if tableRegexStr != "" {
-		re, err := regexp.Compile(tableRegexStr)
-		if err != nil {
-			return nil, err
-		}
-		rf.tableRegex = re
-	}
-
 	return rf, nil
 }
 
 // Match 检查事件是否匹配过滤条件
 func (rf *RouteFilter) Match(event *models.Event) bool {
 	// 检查数据库
-	if !rf.matchDatabase(event.Database) {
-		return false
-	}
-
-	// 检查表
-	if !rf.matchTable(event.Table) {
+	if !rf.matchDatabase(event.Database, event.Table) {
 		return false
 	}
 
@@ -65,40 +39,19 @@ func (rf *RouteFilter) Match(event *models.Event) bool {
 }
 
 // matchDatabase 检查数据库名
-func (rf *RouteFilter) matchDatabase(db string) bool {
-	// 如果指定了精确列表
-	if len(rf.includeDB) > 0 {
-		if !rf.includeDB[db] {
-			return false
+func (rf *RouteFilter) matchDatabase(schema, table string) bool {
+	if len(rf.rangeMatcher) > 0 {
+		input := fmt.Sprintf("%s.%s", schema, table)
+		for _, m := range rf.rangeMatcher {
+			if m.Match(input) {
+				// log.Printf("matched %s", input)
+				return true
+			}
 		}
+		return false
 	}
 
-	// 如果指定了正则
-	if rf.dbRegex != nil {
-		if !rf.dbRegex.MatchString(db) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// matchTable 检查表名
-func (rf *RouteFilter) matchTable(table string) bool {
-	// 如果指定了精确列表
-	if len(rf.includeTable) > 0 {
-		if !rf.includeTable[table] {
-			return false
-		}
-	}
-
-	// 如果指定了正则
-	if rf.tableRegex != nil {
-		if !rf.tableRegex.MatchString(table) {
-			return false
-		}
-	}
-
+	// 未指定不需要检查
 	return true
 }
 
