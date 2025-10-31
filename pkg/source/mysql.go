@@ -77,10 +77,49 @@ func (ms *MySQLSource) Open(ctx context.Context) error {
 	err = row.Scan(&binlogFile, &binlogPos)
 	if err != nil {
 		// 如果是从库，尝试 SHOW SLAVE STATUS
-		row = db.QueryRowContext(ctx, "SHOW SLAVE STATUS")
-		err = row.Scan(nil, &binlogFile, &binlogPos) // Skip first column
+		// SHOW SLAVE STATUS 返回很多列，我们需要用 QueryContext 而不是 QueryRowContext
+		rows, err := db.QueryContext(ctx, "SHOW SLAVE STATUS")
 		if err != nil {
 			return fmt.Errorf("failed to get binlog position: %w", err)
+		}
+		defer rows.Close()
+
+		if rows.Next() {
+			// 获取所有列名
+			cols, err := rows.Columns()
+			if err != nil {
+				return fmt.Errorf("failed to get columns: %w", err)
+			}
+
+			// 创建一个 interface{} 的切片来接收所有列
+			values := make([]interface{}, len(cols))
+			for i := range cols {
+				values[i] = new(interface{})
+			}
+
+			if err := rows.Scan(values...); err != nil {
+				return fmt.Errorf("failed to scan slave status: %w", err)
+			}
+
+			// 找到 Master_Log_File 和 Read_Master_Log_Pos 的索引
+			var fileIdx, posIdx int
+			for i, col := range cols {
+				if col == "Master_Log_File" {
+					fileIdx = i
+				} else if col == "Read_Master_Log_Pos" {
+					posIdx = i
+				}
+			}
+
+			// 提取值
+			if fileVal := values[fileIdx].(*interface{}); *fileVal != nil {
+				binlogFile = (*fileVal).(string)
+			}
+			if posVal := values[posIdx].(*interface{}); *posVal != nil {
+				binlogPos = uint32((*posVal).(int64))
+			}
+		} else {
+			return fmt.Errorf("no slave status found, this is neither a master nor a slave")
 		}
 	}
 
