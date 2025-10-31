@@ -12,16 +12,20 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteExporter SQLite 导出器的完整实现
+// SQLiteExporter SQLite 导出器的完整实现（使用分片锁优化并发性能）
 type SQLiteExporter struct {
 	path         string
 	db           *sql.DB
 	helper       *CommandHelper
 	sqlGenerator *util.SQLGenerator
 	actions      map[string]bool
-	batch        []*models.Event
-	batchSize    int
-	mu           sync.Mutex
+
+	// 使用分片锁：按 database.table 分片，减少锁竞争
+	// 这样多个 worker 可以并行处理不同的表
+	shardLock   *util.ShardedLock
+	batches     map[int][]*models.Event // shardIdx -> batch
+	batchSize   int
+	batchesLock sync.Mutex // 仅用于访问 batches map 本身
 }
 
 func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]bool) (*SQLiteExporter, error) {
@@ -71,21 +75,14 @@ func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]
 		helper:       helper,
 		sqlGenerator: util.NewSQLGenerator(config.GlobalMonitor),
 		actions:      actions,
-		batch:        make([]*models.Event, 0, 100),
-		batchSize:    100,
+		shardLock:    util.NewShardedLock(16), // 16 个分片，通常足够
+		batches:      make(map[int][]*models.Event),
+		batchSize:    1000,
 	}, nil
 }
 
 func (se *SQLiteExporter) Handle(event *models.Event) error {
-	se.mu.Lock()
-	defer se.mu.Unlock()
-
-	// 过滤：只导出指定的 action
-	if !se.actions[event.Action] {
-		return nil
-	}
-
-	// 映射列名：将 col_N 替换为实际列名
+	// 映射列名和生成 SQL 在锁外进行（这些是 CPU 密集操作）
 	se.helper.MapColumnNames(event)
 
 	// 生成 SQL（此时列名已经映射为实际列名）
@@ -100,19 +97,47 @@ func (se *SQLiteExporter) Handle(event *models.Event) error {
 		}
 	}
 
-	// 添加到批处理队列
-	se.batch = append(se.batch, event)
+	// 过滤：只导出指定的 action（在锁外判断）
+	if !se.actions[event.Action] {
+		return nil
+	}
 
-	// 当达到批处理大小时，执行批量插入
-	if len(se.batch) >= se.batchSize {
-		return se.flushBatch()
+	// 根据 database.table 获取分片索引，实现并行处理不同表
+	shardKey := event.Database + "." + event.Table
+	mu, shardIdx := se.shardLock.GetShard(shardKey)
+
+	// 只在添加到批处理队列时使用锁（最小化临界区）
+	mu.Lock()
+	se.batchesLock.Lock()
+	batch := se.batches[shardIdx]
+	batch = append(batch, event)
+	se.batches[shardIdx] = batch
+	needsFlush := len(batch) >= se.batchSize
+	se.batchesLock.Unlock()
+	mu.Unlock()
+
+	// 在锁外执行批量插入
+	if needsFlush {
+		mu.Lock()
+		se.batchesLock.Lock()
+		batch := se.batches[shardIdx]
+		se.batches[shardIdx] = make([]*models.Event, 0, se.batchSize)
+		se.batchesLock.Unlock()
+		mu.Unlock()
+
+		if len(batch) > 0 {
+			if err := se.flushBatchDirect(batch); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
 }
 
-func (se *SQLiteExporter) flushBatch() error {
-	if len(se.batch) == 0 {
+// flushBatchDirect 直接刷新一个批次的数据（由 Handle 直接调用）
+func (se *SQLiteExporter) flushBatchDirect(batch []*models.Event) error {
+	if len(batch) == 0 {
 		return nil
 	}
 
@@ -134,7 +159,7 @@ func (se *SQLiteExporter) flushBatch() error {
 	}
 	defer stmt.Close()
 
-	for _, event := range se.batch {
+	for _, event := range batch {
 		beforeJSON, _ := json.Marshal(event.BeforeValues)
 		afterJSON, _ := json.Marshal(event.AfterValues)
 
@@ -155,16 +180,29 @@ func (se *SQLiteExporter) flushBatch() error {
 		}
 	}
 
-	se.batch = se.batch[:0] // 清空批处理队列
 	return tx.Commit()
 }
 
-func (se *SQLiteExporter) Flush() error {
-	se.mu.Lock()
-	defer se.mu.Unlock()
+// flushAllBatches 刷新所有分片的批数据（在 Flush 时调用）
+func (se *SQLiteExporter) flushAllBatches() error {
+	se.batchesLock.Lock()
+	defer se.batchesLock.Unlock()
 
+	for shardIdx := range se.batches {
+		batch := se.batches[shardIdx]
+		if len(batch) > 0 {
+			if err := se.flushBatchDirect(batch); err != nil {
+				return err
+			}
+			se.batches[shardIdx] = make([]*models.Event, 0, se.batchSize)
+		}
+	}
+	return nil
+}
+
+func (se *SQLiteExporter) Flush() error {
 	// 刷新剩余的批处理数据
-	if err := se.flushBatch(); err != nil {
+	if err := se.flushAllBatches(); err != nil {
 		return err
 	}
 
@@ -200,15 +238,7 @@ func newH2Exporter(output string, helper *CommandHelper, actions map[string]bool
 }
 
 func (he *H2Exporter) Handle(event *models.Event) error {
-	he.mu.Lock()
-	defer he.mu.Unlock()
-
-	// 过滤：只导出指定的 action
-	if !he.actions[event.Action] {
-		return nil
-	}
-
-	// 映射列名：将 col_N 替换为实际列名
+	// 映射列名和生成 SQL 在锁外进行（这些是 CPU 密集操作）
 	he.helper.MapColumnNames(event)
 
 	// 生成 SQL（此时列名已经映射为实际列名）
@@ -221,6 +251,11 @@ func (he *H2Exporter) Handle(event *models.Event) error {
 		case "DELETE":
 			event.SQL = he.sqlGenerator.GenerateDeleteSQL(event)
 		}
+	}
+
+	// 过滤：只导出指定的 action（在锁外判断）
+	if !he.actions[event.Action] {
+		return nil
 	}
 
 	// TODO: 实现 H2 协议
@@ -255,15 +290,7 @@ func newHiveExporter(output string, helper *CommandHelper, actions map[string]bo
 }
 
 func (he *HiveExporter) Handle(event *models.Event) error {
-	he.mu.Lock()
-	defer he.mu.Unlock()
-
-	// 过滤：只导出指定的 action
-	if !he.actions[event.Action] {
-		return nil
-	}
-
-	// 映射列名：将 col_N 替换为实际列名
+	// 映射列名和生成 SQL 在锁外进行（这些是 CPU 密集操作）
 	he.helper.MapColumnNames(event)
 
 	// 生成 SQL（此时列名已经映射为实际列名）
@@ -276,6 +303,11 @@ func (he *HiveExporter) Handle(event *models.Event) error {
 		case "DELETE":
 			event.SQL = he.sqlGenerator.GenerateDeleteSQL(event)
 		}
+	}
+
+	// 过滤：只导出指定的 action（在锁外判断）
+	if !he.actions[event.Action] {
+		return nil
 	}
 
 	// TODO: 实现 Hive 分区表导出
@@ -310,15 +342,7 @@ func newESExporter(output string, helper *CommandHelper, actions map[string]bool
 }
 
 func (ee *ESExporter) Handle(event *models.Event) error {
-	ee.mu.Lock()
-	defer ee.mu.Unlock()
-
-	// 过滤：只导出指定的 action
-	if !ee.actions[event.Action] {
-		return nil
-	}
-
-	// 映射列名：将 col_N 替换为实际列名
+	// 映射列名和生成 SQL 在锁外进行（这些是 CPU 密集操作）
 	ee.helper.MapColumnNames(event)
 
 	// 生成 SQL（此时列名已经映射为实际列名）
@@ -331,6 +355,11 @@ func (ee *ESExporter) Handle(event *models.Event) error {
 		case "DELETE":
 			event.SQL = ee.sqlGenerator.GenerateDeleteSQL(event)
 		}
+	}
+
+	// 过滤：只导出指定的 action（在锁外判断）
+	if !ee.actions[event.Action] {
+		return nil
 	}
 
 	// TODO: 实现 Elasticsearch 索引导出

@@ -398,15 +398,7 @@ func newCSVExporter(output string, helper *CommandHelper, actions map[string]boo
 }
 
 func (ce *CSVExporter) Handle(event *models.Event) error {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
-
-	// 过滤：只导出指定的 action
-	if !ce.actions[event.Action] {
-		return nil
-	}
-
-	// 映射列名：将 col_N 替换为实际列名
+	// 映射列名和生成 SQL 在锁外进行（这些是 CPU 密集操作）
 	ce.helper.MapColumnNames(event)
 
 	// 生成 SQL（此时列名已经映射为实际列名）
@@ -421,6 +413,13 @@ func (ce *CSVExporter) Handle(event *models.Event) error {
 		}
 	}
 
+	// 过滤：只导出指定的 action（在锁外判断）
+	if !ce.actions[event.Action] {
+		return nil
+	}
+
+	// 只在写入文件时使用锁（最小化临界区）
+	ce.mu.Lock()
 	record := []string{
 		event.Timestamp.String(),
 		event.EventType,
@@ -431,7 +430,10 @@ func (ce *CSVExporter) Handle(event *models.Event) error {
 		event.Action,
 		event.SQL,
 	}
-	return ce.writer.Write(record)
+	err := ce.writer.Write(record)
+	ce.mu.Unlock()
+
+	return err
 }
 
 func (ce *CSVExporter) Flush() error {

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -33,6 +34,9 @@ type MetaCache struct {
 	db               *sql.DB
 	monitor          *monitor.Monitor   // 用于性能监控
 	sf               singleflight.Group // 用于防止并发查询同一个表
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cleanupTicker    *time.Ticker // 定期清理过期缓存
 }
 
 // NewMetaCache 创建缓存
@@ -40,14 +44,21 @@ func NewMetaCache(db *sql.DB, maxSize int, m *monitor.Monitor) *MetaCache {
 	if maxSize <= 0 {
 		maxSize = 10000
 	}
-	return &MetaCache{
+	ctx, cancel := context.WithCancel(context.Background())
+	mc := &MetaCache{
 		cache:            make(map[string]*models.TableMeta),
 		notFoundCache:    make(map[string]*TableNotFoundCache),
 		maxSize:          maxSize,
 		notFoundCacheTTL: 1 * time.Minute, // 表不存在缓存1分钟
 		db:               db,
 		monitor:          m,
+		ctx:              ctx,
+		cancel:           cancel,
+		cleanupTicker:    time.NewTicker(30 * time.Second), // 每30秒清理一次过期缓存
 	}
+	// 启动后台清理 goroutine
+	go mc.cleanupExpiredEntries()
+	return mc
 }
 
 // GetTableMeta 获取表元数据
@@ -66,16 +77,16 @@ func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, erro
 
 	key := schema + "." + table
 
-	// 先检查表是否在不存在缓存中（在 1 分钟内不再查询）
+	// 合并两次 lock 为一次，降低锁竞争
 	mc.mu.RLock()
+
+	// 先检查表是否在不存在缓存中（在 1 分钟内不再查询）
 	if nfc, ok := mc.notFoundCache[key]; ok && !nfc.IsExpired() {
 		mc.mu.RUnlock()
 		return nil, fmt.Errorf("table %s.%s not found (cached)", schema, table)
 	}
-	mc.mu.RUnlock()
 
 	// 检查表元数据缓存
-	mc.mu.RLock()
 	if meta, ok := mc.cache[key]; ok {
 		// log.Printf("命中  %s", key)
 		mc.mu.RUnlock()
@@ -111,14 +122,10 @@ func (mc *MetaCache) GetTableMeta(schema, table string) (*models.TableMeta, erro
 		if len(mc.cache) < mc.maxSize {
 			mc.cache[key] = meta
 		} else {
-			// LRU 淘汰：简单实现为清空一半缓存
-			for k := range mc.cache {
-				log.Printf("淘汰  %s", key)
-				delete(mc.cache, k)
-				if len(mc.cache) < mc.maxSize/2 {
-					break
-				}
-			}
+			// LRU 淘汰：简单有效的清空策略
+			// 缓存满时清空所有缓存，这样可以确保频繁使用的表会快速被重新缓存
+			log.Printf("Cache full (%d entries), clearing all and adding %s", len(mc.cache), key)
+			mc.cache = make(map[string]*models.TableMeta)
 			mc.cache[key] = meta
 		}
 		mc.mu.Unlock()
@@ -190,4 +197,29 @@ func (mc *MetaCache) Clear() {
 	defer mc.mu.Unlock()
 	mc.cache = make(map[string]*models.TableMeta)
 	mc.notFoundCache = make(map[string]*TableNotFoundCache)
+}
+
+// cleanupExpiredEntries 定期清理过期的不存在表缓存
+func (mc *MetaCache) cleanupExpiredEntries() {
+	for {
+		select {
+		case <-mc.ctx.Done():
+			return
+		case <-mc.cleanupTicker.C:
+			mc.mu.Lock()
+			// 清理过期的 notFoundCache 条目
+			for key, entry := range mc.notFoundCache {
+				if entry.IsExpired() {
+					delete(mc.notFoundCache, key)
+				}
+			}
+			mc.mu.Unlock()
+		}
+	}
+}
+
+// Close 关闭缓存，清理资源
+func (mc *MetaCache) Close() {
+	mc.cancel()
+	mc.cleanupTicker.Stop()
 }

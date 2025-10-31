@@ -16,16 +16,16 @@ const defaultBufferSize = 10000
 
 // EventProcessor 生产者-消费者事件处理器
 type EventProcessor struct {
-	dataSource    source.DataSource
-	filter        *filter.RouteFilter
-	workerCount   int
-	bufferSize    int
+	dataSource     source.DataSource
+	filter         *filter.RouteFilter
+	workerCount    int
+	bufferSize     int
 	workerChannels []chan *models.Event
-	wg            sync.WaitGroup
+	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
-	handlers      []EventHandler
-	mu            sync.RWMutex
+	handlers       []EventHandler
+	mu             sync.RWMutex
 }
 
 // EventHandler 事件处理器接口
@@ -166,11 +166,9 @@ func (ep *EventProcessor) consumer(id int) {
 
 // handleEvent 处理单个事件
 func (ep *EventProcessor) handleEvent(event *models.Event) {
-	ep.mu.RLock()
-	handlers := ep.handlers
-	ep.mu.RUnlock()
-
-	for _, handler := range handlers {
+	// 注意：handlers 在 Start() 后就不会改变，所以可以在消费者中直接访问
+	// 避免每个事件都要获取 RLock，大幅降低锁竞争
+	for _, handler := range ep.handlers {
 		if err := handler.Handle(event); err != nil {
 			log.Printf("Error handling event: %v\n", err)
 		}
@@ -179,11 +177,8 @@ func (ep *EventProcessor) handleEvent(event *models.Event) {
 
 // flush 刷新所有处理器
 func (ep *EventProcessor) flush() error {
-	ep.mu.RLock()
-	handlers := ep.handlers
-	ep.mu.RUnlock()
-
-	for _, handler := range handlers {
+	// 注意：handlers 在 Start() 后就不会改变，所以可以直接访问
+	for _, handler := range ep.handlers {
 		if err := handler.Flush(); err != nil {
 			return fmt.Errorf("error flushing handler: %w", err)
 		}
