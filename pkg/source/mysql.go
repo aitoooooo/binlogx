@@ -124,7 +124,7 @@ func (ms *MySQLSource) Open(ctx context.Context) error {
 				}
 			}
 			if posVal := values[posIdx].(*interface{}); *posVal != nil {
-				// MySQL 返回的位置可能是 int64 或 uint64
+				// MySQL 返回的位置可能是 int64、uint64、float64 或 []uint8
 				switch v := (*posVal).(type) {
 				case int64:
 					binlogPos = uint32(v)
@@ -132,6 +132,14 @@ func (ms *MySQLSource) Open(ctx context.Context) error {
 					binlogPos = uint32(v)
 				case float64:
 					binlogPos = uint32(v)
+				case []uint8:
+					// 从字节数组转换为字符串，然后转为 uint32
+					posStr := string(v)
+					if p, err := strconv.ParseUint(posStr, 10, 32); err == nil {
+						binlogPos = uint32(p)
+					} else {
+						return fmt.Errorf("failed to parse Read_Master_Log_Pos: %s", posStr)
+					}
 				default:
 					return fmt.Errorf("unexpected type for Read_Master_Log_Pos: %T", v)
 				}
