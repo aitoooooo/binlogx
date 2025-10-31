@@ -113,10 +113,28 @@ func (ms *MySQLSource) Open(ctx context.Context) error {
 
 			// 提取值
 			if fileVal := values[fileIdx].(*interface{}); *fileVal != nil {
-				binlogFile = (*fileVal).(string)
+				// MySQL 驱动返回的可能是 []uint8 或 string
+				switch v := (*fileVal).(type) {
+				case string:
+					binlogFile = v
+				case []uint8:
+					binlogFile = string(v)
+				default:
+					return fmt.Errorf("unexpected type for Master_Log_File: %T", v)
+				}
 			}
 			if posVal := values[posIdx].(*interface{}); *posVal != nil {
-				binlogPos = uint32((*posVal).(int64))
+				// MySQL 返回的位置可能是 int64 或 uint64
+				switch v := (*posVal).(type) {
+				case int64:
+					binlogPos = uint32(v)
+				case uint64:
+					binlogPos = uint32(v)
+				case float64:
+					binlogPos = uint32(v)
+				default:
+					return fmt.Errorf("unexpected type for Read_Master_Log_Pos: %T", v)
+				}
 			}
 		} else {
 			return fmt.Errorf("no slave status found, this is neither a master nor a slave")
