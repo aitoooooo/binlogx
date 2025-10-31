@@ -219,6 +219,105 @@ EventProcessor lock消除: +10-15%
 
 ### 4.1 短期优化（1-2 周）
 
+#### Priority 0: MySQL Binlog 读取实现 ⚠️ 关键功能
+**当前状态**: ❌ 占位符实现（pkg/source/mysql.go L50-60）
+**工作量**: 大（3-5 天）
+**难度**: ★★★★
+
+**当前代码**:
+```go
+// Read 读取下一个事件
+func (ms *MySQLSource) Read() (*models.Event, error) {
+    if ms.eof {
+        return nil, fmt.Errorf("EOF")
+    }
+
+    // TODO: 实现从 MySQL binlog 读取事件的逻辑
+    return nil, fmt.Errorf("not implemented")
+}
+```
+
+**需要实现的内容**:
+1. MySQL 主从复制协议（Replication Protocol）
+   - 发送 COM_REGISTER_SLAVE 命令
+   - 发送 COM_BINLOG_DUMP 命令
+   - 接收二进制日志事件
+
+2. Binlog 事件解析
+   - Binlog Header 解析（13 字节）
+   - 各种 Event Type 的具体解析
+   - 数据完整性验证（CRC32）
+
+3. 错误处理和重连
+   - 网络中断自动重连
+   - 事件解析失败处理
+   - Binlog 轮转处理
+
+**推荐方案**:
+```
+方案 A: 使用现有库
+├─ github.com/go-mysql-org/go-mysql
+├─ 优点：功能完整、可靠
+└─ 缺点：引入依赖
+
+方案 B: 手工实现
+├─ 优点：轻量级、可控
+├─ 缺点：工作量大、易出错
+└─ 参考：MySQL 官方文档
+
+推荐：方案 A（使用 go-mysql）
+```
+
+**实现步骤**:
+1. 选择合适的 MySQL binlog 库
+   ```bash
+   go get github.com/go-mysql-org/go-mysql
+   ```
+
+2. 实现 MySQL 连接和初始化
+   ```go
+   syncer := replication.NewBinlogSyncer(...)
+   syncer.StartSync(...)
+   ```
+
+3. 实现 Event 读取循环
+   ```go
+   func (ms *MySQLSource) Read() (*models.Event, error) {
+       event, err := ms.streamer.GetEvent(context.Background())
+       if err != nil {
+           return nil, err
+       }
+       return ms.convertEvent(event), nil
+   }
+   ```
+
+4. 实现事件转换（MySQL Event → binlogx Event）
+   ```go
+   func (ms *MySQLSource) convertEvent(rawEvent *replication.BinlogEvent) *models.Event {
+       // 将 MySQL 的 binlog event 转换为项目中的 Event 模型
+       // 提取：时间戳、操作类型、库表、行数据等
+   }
+   ```
+
+5. 添加完整的测试
+   ```bash
+   # 连接测试 MySQL
+   go test -run TestMySQLSource ./pkg/source
+   ```
+
+**测试清单**:
+- ✓ MySQL 连接（ping）
+- ✓ Binlog 读取（各种 event type）
+- ✓ 事件转换准确性
+- ✓ 网络中断恢复
+- ✓ 并发读取安全性
+
+**风险和注意事项**:
+- 🔴 MySQL 主从复制协议复杂，容易出错
+- 🟡 需要测试环境（真实 MySQL 实例）
+- 🟡 性能可能不如离线文件读取
+- 🟢 一旦完成，功能就完整了
+
 #### Priority 1: H2/Hive/ES 导出器实现
 **当前状态**: 占位符实现
 **工作量**: 中等（每个 2-3 天）
@@ -391,9 +490,12 @@ shardLock := NewShardedLock(numShards)
 
 ### 当前代码的不足
 
+### 5.1 代码的主要缺陷
+
 | 项 | 现状 | 优先级 | 工作量 |
 |---|------|--------|--------|
-| H2/Hive/ES 占位符 | ⚠️ 未实现 | P0 | M |
+| MySQL Binlog 读取 | ❌ 未实现 | **P0** | **L** |
+| H2/Hive/ES 导出器 | ⚠️ 占位符 | P0 | M |
 | 性能基准 | ⚠️ 无正式数据 | P1 | S |
 | 内存优化 | ⚠️ 有空间 | P2 | M |
 | 错误恢复 | ⚠️ 基础 | P2 | M |
@@ -604,9 +706,12 @@ github.com/spf13/cobra
 
 **Q: 下次开发应该从哪里开始？**
 A: 根据优先级：
-1. 实现 H2/Hive/ES 导出器（Priority 1）
-2. 建立性能基准测试（Priority 1）
-3. 优化内存占用（Priority 2）
+1. 🔴 **实现 MySQL Binlog 读取** (Priority 0) - 这是核心功能缺失
+2. 实现 H2/Hive/ES 导出器（Priority 1）
+3. 建立性能基准测试（Priority 1）
+4. 优化内存占用（Priority 2）
+
+> 如果不实现 MySQL 读取，只能处理离线 binlog 文件，功能不完整
 
 **Q: 如何验证优化是否有效？**
 A: 使用性能基准测试
