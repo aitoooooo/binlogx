@@ -73,7 +73,7 @@ binlogx stat --source /path/to/binlog.000001 \
 ### 交互式查看事件详情
 
 ```bash
-binlogx parse --source /path/to/binlog.000001 --page-size 20
+binlogx parse --source /path/to/binlog.000001
 ```
 
 ### 生成前向 SQL
@@ -113,12 +113,9 @@ binlogx export --source /path/to/binlog.000001 --type sqlite --output /path/to/b
 | `--start-time` | string | N | 开始时间 `YYYY-MM-DD HH:MM:SS` |
 | `--end-time` | string | N | 结束时间 `YYYY-MM-DD HH:MM:SS` |
 | `--action` | []string | N | 操作类型过滤（INSERT, UPDATE, DELETE） |
-| `--slow-threshold` | duration | N | 慢方法阈值，默认 1s |
-| `--event-size-threshold` | int | N | 事件大小阈值（字节），默认 0（不检测） |
-| `--db-regex` | string | N | 分库正则，例 `db_[0-3]` |
-| `--table-regex` | string | N | 分表正则，例 `table_[0-15]` |
-| `--include-db` | []string | N | 精确库列表 |
-| `--include-table` | []string | N | 精确表列表 |
+| `--slow-threshold` | duration | N | 慢方法阈值，默认 50ms |
+| `--event-size-threshold` | int | N | 事件大小阈值（字节），默认 1024 |
+| `--schema-table-regex` | []string | N | 分库表范围匹配，例 `db_[0-3].my_table_[0-99]` |
 | `--workers` | int | N | worker 数量，默认 0=CPU 数 |
 
 ① 二选一：`--source` 和 `--db-connection` 必须指定其一
@@ -144,10 +141,10 @@ binlogx stat --source /path/to/binlog.000001 --top 20
 交互式分页查看 binlog 事件详情。
 
 ```bash
-binlogx parse --source /path/to/binlog.000001 --page-size 20
+binlogx parse --source /path/to/binlog.000001
 ```
 
-按 `n` 翻页，`q` 退出。
+按 `空格` 或 `Enter` 显示下一个事件，`q` 退出浏览。
 
 ### sql
 
@@ -199,31 +196,42 @@ binlogx export --source /path/to/binlog.000001 --type es --output http://localho
 binlogx version
 ```
 
-## 分库表路由
+## 分库表范围匹配
 
-### 精确匹配
+### 匹配语法
+
+使用简化的**区间 + 通配符**语法：
+
+- `*` - 匹配任意字母/数字/下划线（至少一个）
+- `[a-b]` - 整数闭区间，展开为 `(a|a+1|...|b)`
+- 其他字符原样匹配
+
+### 使用示例
 
 ```bash
+# 匹配 db_0 到 db_9 库的所有表
+binlogx stat --source /path/to/binlog.000001 --schema-table-regex "db_[0-9].*"
+
+# 匹配 db_0~db_9 库的 table_00~table_99 表
+binlogx stat --source /path/to/binlog.000001 --schema-table-regex "db_[0-9].table_[0-99]"
+
+# 匹配所有库的 users 表
+binlogx stat --source /path/to/binlog.000001 --schema-table-regex "*.users"
+
+# 使用多个匹配条件（OR 逻辑）
 binlogx stat --source /path/to/binlog.000001 \
-  --include-db db1 --include-db db2 \
-  --include-table users --include-table orders
+  --schema-table-regex "db_[0-3].*" \
+  --schema-table-regex "prod.*"
 ```
 
-### 正则匹配
+### 常见模式
 
-```bash
-# 匹配 db_0 到 db_9
-binlogx stat --source /path/to/binlog.000001 --db-regex "db_[0-9]"
-
-# 匹配 table_00 到 table_99
-binlogx stat --source /path/to/binlog.000001 --table-regex "table_[0-9]{2}"
-```
-
-### 匹配优先级
-
-1. 先检查精确列表 (`--include-db`, `--include-table`)
-2. 再检查正则表达式 (`--db-regex`, `--table-regex`)
-3. 任一不匹配即跳过事件
+| 模式 | 说明 | 匹配示例 |
+|------|------|---------|
+| `db_[0-9].*` | db_0 到 db_9 的所有表 | db_0.users, db_5.orders |
+| `db_[0-9].table_[0-99]` | 特定库表范围 | db_0.table_00, db_5.table_50 |
+| `*.users` | 所有库的 users 表 | mydb.users, test.users |
+| `[0-3].log*` | 0-3 库的 log 开头的表 | 0.logs, 2.log_events |
 
 ## 并发配置
 

@@ -49,39 +49,30 @@ binlogx stat --source file.binlog --end-time "2024-01-01 12:00:00"
 binlogx stat --source file.binlog --action INSERT --action UPDATE
 ```
 
-### 分库表路由
+### 分库表范围匹配
 
-#### `--db-regex` string
-数据库名称正则表达式
+#### `--schema-table-regex` strings (重复)
+使用简化的**区间 + 通配符**语法对数据库和表进行灵活匹配
 
-```bash
-# 匹配 db_0 到 db_9
-binlogx stat --source file.binlog --db-regex "db_[0-9]"
-
-# 匹配 db_001 到 db_999
-binlogx stat --source file.binlog --db-regex "db_[0-9]{3}"
-```
-
-#### `--table-regex` string
-表名称正则表达式
+**语法说明**：
+- `*` - 匹配任意字母/数字/下划线（至少一个）
+- `[a-b]` - 整数闭区间匹配，展开为 `(a|a+1|...|b)`
+- 其他字符原样匹配
 
 ```bash
-# 匹配 table_00 到 table_99
-binlogx stat --source file.binlog --table-regex "table_[0-9]{2}"
-```
+# 匹配 db_0 到 db_9 库的所有表
+binlogx stat --source file.binlog --schema-table-regex "db_[0-9].*"
 
-#### `--include-db` strings (重复)
-精确库名称列表
+# 匹配 db_0~db_9 库的 table_00~table_99 表
+binlogx stat --source file.binlog --schema-table-regex "db_[0-9].table_[0-99]"
 
-```bash
-binlogx stat --source file.binlog --include-db db1 --include-db db2
-```
+# 匹配所有库的 users 表
+binlogx stat --source file.binlog --schema-table-regex "*.users"
 
-#### `--include-table` strings (重复)
-精确表名称列表
-
-```bash
-binlogx stat --source file.binlog --include-table users --include-table orders
+# 使用多个匹配条件（所有条件 OR 逻辑）
+binlogx stat --source file.binlog \
+  --schema-table-regex "db_[0-3].*" \
+  --schema-table-regex "prod.*"
 ```
 
 ### 并发和性能
@@ -230,23 +221,93 @@ binlogx export --type <format> --output <path> [options]
 #### `--output` string, `-o` (必填)
 输出路径或连接字符串
 
+#### `--action` string, `-a` (可选)
+要导出的事件类型，以逗号分隔，默认：`INSERT,UPDATE,DELETE`
+
+```bash
+# 仅导出 INSERT 和 UPDATE
+binlogx export --source file.binlog \
+  --type sqlite \
+  --output export.db \
+  --action "INSERT,UPDATE"
+```
+
+#### `--batch-size` int, `-b` (可选)
+批处理大小，默认：`1000`。更大的值提高速率但占用更多内存；更小的值降低内存占用但性能较低。
+
+```bash
+# 使用较大的批处理大小以获得更好的性能
+binlogx export --source file.binlog \
+  --type sqlite \
+  --output export.db \
+  --batch-size 5000
+
+# 使用较小的批处理大小以降低内存占用
+binlogx export --source file.binlog \
+  --type sqlite \
+  --output export.db \
+  --batch-size 500
+```
+
+#### `--estimate-total` bool, `-e` (可选)
+在导出前快速扫描统计总事件数，以便显示更准确的进度百分比，默认：`false`
+
+```bash
+# 启用总事件数预估
+binlogx export --source file.binlog \
+  --type sqlite \
+  --output export.db \
+  --estimate-total
+```
+
 **示例**：
 
 ```bash
-# 导出为 CSV
+# 导出为 CSV（使用默认参数）
 binlogx export --source file.binlog \
   --type csv \
   --output ./export.csv
 
-# 导出为 SQLite 数据库
+# 导出为 SQLite 数据库（自定义批处理大小）
 binlogx export --source file.binlog \
   --type sqlite \
-  --output ./binlog.db
+  --output ./binlog.db \
+  --batch-size 2000
 
-# 导出到 Elasticsearch
+# 导出到 Elasticsearch（显示精确进度）
 binlogx export --source file.binlog \
   --type es \
-  --output http://localhost:9200
+  --output http://localhost:9200 \
+  --estimate-total
+
+# 导出特定操作类型（仅 INSERT）
+binlogx export --source file.binlog \
+  --type sqlite \
+  --output ./inserts.db \
+  --action INSERT \
+  --batch-size 3000
+```
+
+**性能优化建议**：
+
+为了获得最佳性能，建议根据硬件配置调整参数：
+- **高端服务器**（32+ 核心）：`--batch-size 5000` 和 `--workers 32`
+- **中端服务器**（8-16 核心）：`--batch-size 2000` 和 `--workers 8`
+- **低端服务器**（2-4 核心）：`--batch-size 500` 和 `--workers 4`
+
+**输出示例**：
+```
+[完成] 总耗时: 1m40s
+
+[统计] 进度: 100.0% (188049/188049) | 已导出: 188049 | 平均速率: 1877.4 events/sec
+
+[性能指标]
+  总耗时: 1m40s (1.67 分钟)
+  处理事件: 188049 个
+  导出事件: 188049 个
+  平均速率: 1877.40 events/sec
+  导出成功率: 100.00%
+  导出速率: 1877.40 events/sec
 ```
 
 ### version - 版本信息
@@ -306,10 +367,13 @@ binlogx rollback-sql \
 ### 场景 4：分库表处理
 
 ```bash
-# 仅处理 db_0 到 db_9，table_00 到 table_99
+# 匹配 db_0 到 db_9 库的所有表
 binlogx stat --source file.binlog \
-  --db-regex "db_[0-9]" \
-  --table-regex "table_[0-9]{2}"
+  --schema-table-regex "db_[0-9].*"
+
+# 匹配 db_0~db_9 库的 table_00~table_99 表
+binlogx stat --source file.binlog \
+  --schema-table-regex "db_[0-9].table_[0-99]"
 ```
 
 ### 场景 5：大规模 binlog 处理

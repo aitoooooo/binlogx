@@ -150,6 +150,9 @@ func (pt *ProgressTracker) PrintSummary() {
 			avgRate,
 		)
 	}
+
+	// 性能指标输出
+	pt.printPerformanceMetrics(elapsed, processed, exported, avgRate)
 }
 
 func (pt *ProgressTracker) formatDuration(d time.Duration) string {
@@ -164,6 +167,29 @@ func (pt *ProgressTracker) formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", minutes, seconds)
 	}
 	return fmt.Sprintf("%ds", seconds)
+}
+
+// printPerformanceMetrics 输出详细的性能指标
+func (pt *ProgressTracker) printPerformanceMetrics(elapsed time.Duration, processed, exported int64, avgRate float64) {
+	fmt.Fprintf(os.Stderr, "\n[性能指标]\n")
+	fmt.Fprintf(os.Stderr, "  总耗时: %s (%.2f 分钟)\n", pt.formatDuration(elapsed), elapsed.Minutes())
+	fmt.Fprintf(os.Stderr, "  处理事件: %d 个\n", processed)
+	fmt.Fprintf(os.Stderr, "  导出事件: %d 个\n", exported)
+	fmt.Fprintf(os.Stderr, "  平均速率: %.2f events/sec\n", avgRate)
+
+	// 计算导出成功率
+	if processed > 0 {
+		successRate := float64(exported) * 100.0 / float64(processed)
+		fmt.Fprintf(os.Stderr, "  导出成功率: %.2f%%\n", successRate)
+	}
+
+	// 计算每秒导出的事件数（只计算成功导出的）
+	if elapsed.Seconds() > 0 {
+		exportRate := float64(exported) / elapsed.Seconds()
+		fmt.Fprintf(os.Stderr, "  导出速率: %.2f events/sec\n", exportRate)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n")
 }
 
 // ProgressWrappedHandler 包装的导出处理器，用于跟踪进度
@@ -308,35 +334,41 @@ var exportCmd = &cobra.Command{
 		defer tracker.Stop()
 		defer tracker.PrintSummary()
 
+		// 获取批处理大小参数
+		batchSize, _ := cmd.Flags().GetInt("batch-size")
+		if batchSize <= 0 {
+			batchSize = 1000
+		}
+
 		// 创建导出处理器
 		var exportHandler processor.EventHandler
 		switch exportType {
 		case "csv":
-			handler, err := newCSVExporter(output, helper, actions)
+			handler, err := newCSVExporter(output, helper, actions, batchSize)
 			if err != nil {
 				return err
 			}
 			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "sqlite":
-			handler, err := newSQLiteExporter(output, helper, actions)
+			handler, err := newSQLiteExporter(output, helper, actions, batchSize)
 			if err != nil {
 				return err
 			}
 			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "h2":
-			handler, err := newH2Exporter(output, helper, actions)
+			handler, err := newH2Exporter(output, helper, actions, batchSize)
 			if err != nil {
 				return err
 			}
 			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "hive":
-			handler, err := newHiveExporter(output, helper, actions)
+			handler, err := newHiveExporter(output, helper, actions, batchSize)
 			if err != nil {
 				return err
 			}
 			exportHandler = NewProgressWrappedHandler(handler, tracker, actions)
 		case "es":
-			handler, err := newESExporter(output, helper, actions)
+			handler, err := newESExporter(output, helper, actions, batchSize)
 			if err != nil {
 				return err
 			}
@@ -369,7 +401,7 @@ type CSVExporter struct {
 	mu           sync.Mutex
 }
 
-func newCSVExporter(output string, helper *CommandHelper, actions map[string]bool) (*CSVExporter, error) {
+func newCSVExporter(output string, helper *CommandHelper, actions map[string]bool, batchSize int) (*CSVExporter, error) {
 	// 处理输出路径
 	path := output
 	if stat, err := os.Stat(output); err == nil && stat.IsDir() {
@@ -460,4 +492,5 @@ func init() {
 	exportCmd.Flags().StringP("output", "o", "", "输出路径或连接串 (必填)")
 	exportCmd.Flags().StringP("action", "a", "INSERT,UPDATE,DELETE", "要导出的事件类型，以逗号分隔（默认: INSERT,UPDATE,DELETE）")
 	exportCmd.Flags().BoolP("estimate-total", "e", false, "在导出前快速扫描统计总事件数，以便显示更准确的进度百分比 (默认: false)")
+	exportCmd.Flags().IntP("batch-size", "b", 1000, "批处理大小，越大写入性能越好但内存占用越多 (默认: 1000)")
 }

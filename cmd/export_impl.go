@@ -28,7 +28,7 @@ type SQLiteExporter struct {
 	batchesLock sync.Mutex // 仅用于访问 batches map 本身
 }
 
-func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]bool) (*SQLiteExporter, error) {
+func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]bool, batchSize int) (*SQLiteExporter, error) {
 	// 处理输出路径
 	path := output
 	if path == "" {
@@ -77,7 +77,7 @@ func newSQLiteExporter(output string, helper *CommandHelper, actions map[string]
 		actions:      actions,
 		shardLock:    util.NewShardedLock(16), // 16 个分片，通常足够
 		batches:      make(map[int][]*models.Event),
-		batchSize:    1000,
+		batchSize:    batchSize,
 	}, nil
 }
 
@@ -225,7 +225,7 @@ type H2Exporter struct {
 	mu           sync.Mutex
 }
 
-func newH2Exporter(output string, helper *CommandHelper, actions map[string]bool) (*H2Exporter, error) {
+func newH2Exporter(output string, helper *CommandHelper, actions map[string]bool, batchSize int) (*H2Exporter, error) {
 	if output == "" {
 		output = "binlog_export.h2"
 	}
@@ -277,7 +277,7 @@ type HiveExporter struct {
 	mu           sync.Mutex
 }
 
-func newHiveExporter(output string, helper *CommandHelper, actions map[string]bool) (*HiveExporter, error) {
+func newHiveExporter(output string, helper *CommandHelper, actions map[string]bool, batchSize int) (*HiveExporter, error) {
 	if output == "" {
 		output = "/hive/binlog_export"
 	}
@@ -329,7 +329,7 @@ type ESExporter struct {
 	mu           sync.Mutex
 }
 
-func newESExporter(output string, helper *CommandHelper, actions map[string]bool) (*ESExporter, error) {
+func newESExporter(output string, helper *CommandHelper, actions map[string]bool, batchSize int) (*ESExporter, error) {
 	if output == "" {
 		output = "http://localhost:9200"
 	}
