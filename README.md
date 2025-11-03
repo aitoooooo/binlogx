@@ -76,6 +76,14 @@ binlogx stat --source /path/to/binlog.000001 \
 binlogx parse --source /path/to/binlog.000001
 ```
 
+**列名映射**：默认情况下显示占位符列名（`col_0`, `col_1`），要显示真实列名，需同时指定数据库连接：
+
+```bash
+# 离线文件 + 数据库连接 = 真实列名
+binlogx parse --source /path/to/binlog.000001 \
+    --db-connection "user:pass@tcp(host:port)/"
+```
+
 **断点续看功能**：parse 命令支持断点保存和恢复，您可以中断浏览后继续查看：
 
 ```bash
@@ -92,8 +100,15 @@ binlogx parse --source /path/to/binlog.000001
 ### 生成前向 SQL
 
 ```bash
+# 离线文件
 binlogx sql --source /path/to/binlog.000001 > forward.sql
+
+# 在线数据库（指定结束时间自动停止）
+binlogx sql --db-connection "user:pass@tcp(host:port)/" \
+    --end-time "2025-11-03 15:00:00" > forward.sql
 ```
+
+**重要**：对于在线数据库，建议使用 `--end-time` 参数指定结束时间，程序会在读取到超过该时间的事件后自动停止并退出，避免需要手动按 Ctrl+C 中断。
 
 ### 生成回滚 SQL
 
@@ -360,10 +375,10 @@ MIT
 
 ## 文档
 
-- [快速开始指南](docs/QUICKSTART.md) - 5 分钟快速上手
 - [命令行参考](docs/CLI_REFERENCE.md) - 完整命令文档
 - [项目架构](docs/ARCHITECTURE.md) - 设计和实现细节
-- [开发指南](docs/DEVELOPMENT.md) - 扩展和贡献指南
+- [使用指南](docs/GUIDE.md) - 高级使用技巧
+- [开发计划](docs/NEXT_DEVELOPMENT.md) - 下一步开发计划
 
 ## 贡献
 

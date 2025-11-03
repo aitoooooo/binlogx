@@ -29,16 +29,41 @@ binlogx stat --db-connection "root:password@tcp(localhost:3306)/mydb?charset=utf
 #### `--start-time` string
 开始时间，格式：`YYYY-MM-DD HH:MM:SS`
 
+**适用于**：离线文件和在线数据库
+
 ```bash
+# 离线文件
 binlogx stat --source file.binlog --start-time "2024-01-01 10:00:00"
+
+# 在线数据库
+binlogx sql --db-connection "user:pass@tcp(host:port)/" --start-time "2024-01-01 10:00:00"
 ```
 
 #### `--end-time` string
 结束时间，格式：`YYYY-MM-DD HH:MM:SS`
 
+**适用于**：离线文件和在线数据库
+
+**重要**：对于在线数据库，指定 `--end-time` 后，程序会在读取到超过结束时间的事件时自动停止并退出，避免需要手动按 Ctrl+C 中断。
+
 ```bash
+# 离线文件：只处理指定时间范围内的事件
 binlogx stat --source file.binlog --end-time "2024-01-01 12:00:00"
+
+# 在线数据库：自动停止在结束时间
+binlogx sql --db-connection "user:pass@tcp(host:port)/" \
+    --end-time "2024-01-01 12:00:00" > output.sql
+
+# 指定完整时间范围
+binlogx export --db-connection "user:pass@tcp(host:port)/" \
+    --start-time "2024-01-01 10:00:00" \
+    --end-time "2024-01-01 12:00:00" \
+    --type csv --output export.csv
 ```
+
+**使用场景**：
+- 离线文件：过滤特定时间范围的事件
+- 在线数据库：导出历史数据到特定时间点，程序自动停止
 
 ### 操作类型过滤
 
@@ -154,12 +179,53 @@ Total Events: 1234567
 binlogx parse [options]
 ```
 
+**局部参数**：
+
+#### `--start-log-file` string
+起始 binlog 文件名（例如 mysql-bin.000001）
+
+**仅用于在线数据库**（`--db-connection`）
+
+```bash
+# 从指定文件开始读取
+binlogx parse --db-connection "user:pass@tcp(host:port)/" \
+    --start-log-file mysql-bin.000002
+```
+
+#### `--start-log-pos` uint32
+起始 binlog 位置
+
+**仅用于在线数据库**（`--db-connection`），必须与 `--start-log-file` 一起使用
+
+```bash
+# 从指定位置开始读取
+binlogx parse --db-connection "user:pass@tcp(host:port)/" \
+    --start-log-file mysql-bin.000001 \
+    --start-log-pos 1234
+```
+
 **特性**：
 - 流式输出：事件一经解析即刻显示，无需等待完整文件处理
 - 交互式分页：每个事件显示后等待用户操作
 - 断点续看：自动保存和恢复浏览位置
-- 实时列名映射：通过 `--db-connection` 将列名 `col_N` 映射为实际名称
+- 列名映射：支持离线模式+在线数据库组合获取真实列名
 - 完整事件信息：JSON 格式输出，包含所有元数据和生成的 SQL
+
+**列名映射功能**：
+
+默认情况下，binlog 中的行数据使用占位符列名（如 `col_0`, `col_1`）。要显示真实列名，需要提供数据库连接：
+
+```bash
+# 离线文件 + 数据库连接 = 真实列名
+binlogx parse --source /path/to/binlog.000001 \
+    --db-connection "user:pass@tcp(host:port)/"
+
+# 纯离线模式 = 占位符列名
+binlogx parse --source /path/to/binlog.000001
+
+# 在线数据库 = 自动获取真实列名
+binlogx parse --db-connection "user:pass@tcp(host:port)/"
+```
 
 **交互方式**：
 - 按 `空格` 或 `Enter` 显示下一个事件
