@@ -466,9 +466,8 @@ func parsePort(portStr string) uint16 {
 	return uint16(port)
 }
 
-// rowToMap 将行数据转换�� map
-// 注意：RowsEvent.Rows 中的数据可能不包含所有列（有跳过的列）
-// 我们使用索引位置作为列号，然后由 CommandHelper.MapColumnNames 来映射实际列名
+// rowToMap 将行数据转换为 map
+// 根据 ColumnBitmap1 确定哪些列被包含在行数据中
 func (ms *MySQLSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEvent) map[string]interface{} {
 	if row == nil || rowsEvent == nil || rowsEvent.Table == nil {
 		return make(map[string]interface{})
@@ -476,24 +475,15 @@ func (ms *MySQLSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEv
 
 	result := make(map[string]interface{})
 
-	// 如果有跳过的列，需要根�� SkippedColumns 来映射真实列号
-	// SkippedColumns[i] 包含的是被跳过的列号，row[i] 对应的真实列号需要计算
-	if len(rowsEvent.SkippedColumns) > 0 && len(rowsEvent.SkippedColumns) > len(row) {
-		// 有跳过的列，需要重新计算列号
-		includedCols := getIncludedColumnsForBinlog(int(rowsEvent.Table.ColumnCount), rowsEvent.SkippedColumns)
-		for i, col := range row {
-			if i < len(includedCols) {
-				colName := fmt.Sprintf("col_%d", includedCols[i])
-				result[colName] = col
-			}
-		}
-	} else {
-		// 没有跳��的列，直接使用索引作为列号
-		for i, col := range row {
-			if i < int(rowsEvent.Table.ColumnCount) {
-				colName := fmt.Sprintf("col_%d", i)
-				result[colName] = col
-			}
+	// 根据 ColumnBitmap1 确定哪些列被包含
+	// ColumnBitmap1 是一个字节数组，每一位表示对应列是否被包含
+	includedCols := getIncludedColumnIndices(int(rowsEvent.Table.ColumnCount), rowsEvent.ColumnBitmap1)
+
+	// 将 row 中的数据按照 includedCols 映射到正确的列号
+	for i, col := range row {
+		if i < len(includedCols) {
+			colName := fmt.Sprintf("col_%d", includedCols[i])
+			result[colName] = col
 		}
 	}
 

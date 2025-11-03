@@ -59,10 +59,14 @@ var parseCmd = &cobra.Command{
 				"❌ --start-log-pos 必须 >= 4（binlog 文件头占用前 4 字节）")
 		}
 
+		// 保存原始的 DBConnection，用于创建 CommandHelper（列名映射需要）
+		dbConnectionForHelper := cfg.DBConnection
+
 		// 如果同时指定了 --source 和 --db-connection，优先使用 --source（离线模式）
 		if cfg.Source != "" && cfg.DBConnection != "" {
-			fmt.Fprintf(os.Stderr, "⚠️ 同时指定了 --source 和 --db-connection，将优先使用 --source（离线模式）\n\n")
-			cfg.DBConnection = "" // 清除在线连接设置
+			fmt.Fprintf(os.Stderr, "⚠️ 同时指定了 --source 和 --db-connection，将优先使用 --source（离线模式）\n")
+			fmt.Fprintf(os.Stderr, "   --db-connection 将仅用于查询列名\n\n")
+			cfg.DBConnection = "" // 清除在线连接设置，避免创建在线数据源
 		}
 
 		// 如果有验证错误，显示错误信息并返回
@@ -75,7 +79,8 @@ var parseCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "  • 查看在线数据源:     binlogx parse --db-connection='user:pass@tcp(host:port)/'\n")
 			fmt.Fprintf(os.Stderr, "  • 从指定文件开始:     binlogx parse --db-connection='...' --start-log-file=mysql-bin.000002\n")
 			fmt.Fprintf(os.Stderr, "  • 从指定位置开始:     binlogx parse --db-connection='...' --start-log-file=mysql-bin.000001 --start-log-pos=4\n")
-			fmt.Fprintf(os.Stderr, "  • 查看离线文件:       binlogx parse --source=/path/to/binlog\n\n")
+			fmt.Fprintf(os.Stderr, "  • 查看离线文件:       binlogx parse --source=/path/to/binlog\n")
+			fmt.Fprintf(os.Stderr, "  • 离线文件+列名映射:  binlogx parse --source=/path/to/binlog --db-connection='user:pass@tcp(host:port)/'\n\n")
 			return fmt.Errorf("参数验证失败")
 		}
 		// ========== 参数验证结束 ==========
@@ -194,7 +199,7 @@ var parseCmd = &cobra.Command{
 		}
 
 		// 创建命令助手（包含列名缓存和映射功能）
-		helper := NewCommandHelper(cfg.DBConnection)
+		helper := NewCommandHelper(dbConnectionForHelper)
 
 		// 创建流式处理器 - 立即输出事件，不缓存
 		eventChan := make(chan *models.Event, 100)

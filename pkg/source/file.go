@@ -248,8 +248,8 @@ func (fs *FileSource) parseRowsEvent(event *models.Event, e *replication.RowsEve
 }
 
 // rowToMap 将行数据转换为 map
-// 注意：RowsEvent.Rows 中的数据可能不包含所有列（有跳过的列）
-// 我们使用索引位置作为列号，然后由 CommandHelper.MapColumnNames 来映射实际列名
+// 注意：RowsEvent.Rows 中的数据与 ColumnBitmap1 对应
+// ColumnBitmap1 指示了哪些列被包含在行数据中
 func (fs *FileSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEvent) map[string]interface{} {
 	if row == nil || rowsEvent == nil || rowsEvent.Table == nil {
 		return make(map[string]interface{})
@@ -257,54 +257,35 @@ func (fs *FileSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEve
 
 	result := make(map[string]interface{})
 
-	// 如果有跳过的列，需要根据 SkippedColumns 来映射真实列号
-	// SkippedColumns[i] 包含的是被跳过的列号，row[i] 对应的真实列号需要计算
-	if len(rowsEvent.SkippedColumns) > 0 && len(rowsEvent.SkippedColumns) > len(row) {
-		// 有跳过的列，需要重新计算列号
-		includedCols := getIncludedColumnsForBinlog(int(rowsEvent.Table.ColumnCount), rowsEvent.SkippedColumns)
-		for i, col := range row {
-			if i < len(includedCols) {
-				colName := fmt.Sprintf("col_%d", includedCols[i])
-				result[colName] = col
-			}
-		}
-	} else {
-		// 没有跳过的列，直接使用索引作为列号
-		for i, col := range row {
-			if i < int(rowsEvent.Table.ColumnCount) {
-				colName := fmt.Sprintf("col_%d", i)
-				result[colName] = col
-			}
+	// 根据 ColumnBitmap1 确定哪些列被包含
+	// ColumnBitmap1 是一个字节数组，每一位表示对应列是否被包含
+	includedCols := getIncludedColumnIndices(int(rowsEvent.Table.ColumnCount), rowsEvent.ColumnBitmap1)
+
+	// 将 row 中的数据按照 includedCols 映射到正确的列号
+	for i, col := range row {
+		if i < len(includedCols) {
+			colName := fmt.Sprintf("col_%d", includedCols[i])
+			result[colName] = col
 		}
 	}
 
 	return result
 }
 
-// getIncludedColumnsForBinlog 根据跳过的列计算包含的列号列表
-func getIncludedColumnsForBinlog(totalColumns int, skippedColumns [][]int) []int {
-	if len(skippedColumns) == 0 {
-		// 所有列都包含
-		cols := make([]int, totalColumns)
-		for i := 0; i < totalColumns; i++ {
-			cols[i] = i
-		}
-		return cols
-	}
-
-	// 构建跳过列的集合
-	skipped := make(map[int]bool)
-	for _, skipList := range skippedColumns {
-		for _, col := range skipList {
-			skipped[col] = true
-		}
-	}
-
-	// 收集包含的列号
+// getIncludedColumnIndices 根据 ColumnBitmap1 获取被包含的列号列表
+// ColumnBitmap1 中的每一位对应一列，1 表示包含，0 表示不包含
+func getIncludedColumnIndices(totalColumns int, columnBitmap []byte) []int {
 	var included []int
-	for i := 0; i < totalColumns; i++ {
-		if !skipped[i] {
-			included = append(included, i)
+
+	for colIdx := 0; colIdx < totalColumns; colIdx++ {
+		byteIdx := colIdx / 8
+		bitIdx := colIdx % 8
+
+		if byteIdx < len(columnBitmap) {
+			// 检查对应的位是否为 1
+			if (columnBitmap[byteIdx] & (1 << uint(bitIdx))) != 0 {
+				included = append(included, colIdx)
+			}
 		}
 	}
 
