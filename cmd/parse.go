@@ -315,29 +315,25 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 
 		// 如果超过一屏幕，或者已经显示了最少数量的事件且超过行数限制，就提示用户
 		if (pageLines > maxPageLines && pageEvents >= minPageEvents) || pageLines > maxPageLines*2 {
-			fmt.Print("(END) Press SPACE for next, 'q' to quit: ")
+			fmt.Print("(END) Press Enter for next, 'q' to quit: ")
+			fflush()
 
-			// 读取单个按键（空格或 q）
-			var b [1]byte
-			if _, err := os.Stdin.Read(b[:]); err != nil {
+			// 读取用户输入
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
 				break
 			}
 
-			if b[0] == 'q' || b[0] == 'Q' {
-				fmt.Println("\n正在退出...")
+			// 处理输入的第一个字符
+			input = strings.TrimSpace(input)
+			if input == "" || strings.HasPrefix(input, " ") {
+				// 空格或仅有空格则继续
+			} else if input == "q" || input == "Q" {
+				fmt.Println("正在退出...")
 				break
-			}
-
-			// 如果不是空格，继续读取直到回车
-			if b[0] != ' ' {
-				for {
-					if _, err := os.Stdin.Read(b[:]); err != nil {
-						break
-					}
-					if b[0] == '\n' {
-						break
-					}
-				}
+			} else if !strings.HasPrefix(input, " ") && input != "" {
+				// 其他输入，继续显示下一页
 			}
 
 			fmt.Print("\n")
@@ -362,6 +358,11 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 	}
 
 	fmt.Fprintf(os.Stderr, "总共显示事件数: %d\n", eventCount)
+}
+
+// fflush 刷新标准输出
+func fflush() {
+	os.Stdout.Sync()
 }
 
 func init() {
