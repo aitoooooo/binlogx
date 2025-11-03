@@ -290,7 +290,6 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 	const minPageEvents = 1 // 最少每屏显示 1 个事件
 	const maxPageLines = 20 // 每屏最多显示 20 行内容（不含提示）
 
-	reader := bufio.NewReader(os.Stdin)
 	eventCount := 0
 	var lastEvent *models.Event
 	pageLines := 0
@@ -317,14 +316,31 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 		// 如果超过一屏幕，或者已经显示了最少数量的事件且超过行数限制，就提示用户
 		if (pageLines > maxPageLines && pageEvents >= minPageEvents) || pageLines > maxPageLines*2 {
 			fmt.Print("(END) Press SPACE for next, 'q' to quit: ")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
 
-			if input == "q" || input == "Q" {
-				fmt.Println("正在退出...")
+			// 读取单个按键（空格或 q）
+			var b [1]byte
+			if _, err := os.Stdin.Read(b[:]); err != nil {
 				break
 			}
 
+			if b[0] == 'q' || b[0] == 'Q' {
+				fmt.Println("\n正在退出...")
+				break
+			}
+
+			// 如果不是空格，继续读取直到回车
+			if b[0] != ' ' {
+				for {
+					if _, err := os.Stdin.Read(b[:]); err != nil {
+						break
+					}
+					if b[0] == '\n' {
+						break
+					}
+				}
+			}
+
+			fmt.Print("\n")
 			pageLines = 0  // 重置页面行数
 			pageEvents = 0 // 重置页面事件计数
 		}
