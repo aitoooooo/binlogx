@@ -12,15 +12,17 @@ import (
 
 // FileSource 离线 binlog 文件数据源
 type FileSource struct {
-	filePath  string
-	parser    *replication.BinlogParser
-	streamer  *replication.BinlogStreamer
-	eof       bool
-	eventChan chan *replication.BinlogEvent
-	errChan   chan error
-	mu        sync.RWMutex
-	startTime time.Time
-	endTime   time.Time
+	filePath   string
+	parser     *replication.BinlogParser
+	streamer   *replication.BinlogStreamer
+	eof        bool
+	eventChan  chan *replication.BinlogEvent
+	errChan    chan error
+	mu         sync.RWMutex
+	startTime  time.Time
+	endTime    time.Time
+	startPos   uint32 // 断点续看的起始位置
+	startFile  string // 断点续看的起始文件（用于多文件场景）
 }
 
 // NewFileSource 创建文件数据源
@@ -36,6 +38,14 @@ func (fs *FileSource) SetTimeRange(start, end time.Time) {
 	defer fs.mu.Unlock()
 	fs.startTime = start
 	fs.endTime = end
+}
+
+// SetStartPosition 设置起始位置（用于断点续看）
+func (fs *FileSource) SetStartPosition(file string, pos uint32) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.startFile = file
+	fs.startPos = pos
 }
 
 // Open 打开文件并初始化解析器
@@ -60,8 +70,19 @@ func (fs *FileSource) readEvents(ctx context.Context, parser *replication.Binlog
 	defer close(fs.eventChan)
 	defer close(fs.errChan)
 
+	// 获取起始位置配置
+	fs.mu.RLock()
+	startPos := fs.startPos
+	fs.mu.RUnlock()
+
 	// 定义事件回调函数，在解析器中被调用
 	onEvent := func(e *replication.BinlogEvent) error {
+		// 如果指定了起始位置，跳过在这个位置之前的事件
+		// 注意：LogPos 是事件的结束位置，所以我们需要 > startPos 而不是 >= startPos
+		if startPos > 0 && e.Header.LogPos <= startPos {
+			return nil // 跳过此事件，因为它在断点位置之前或就是断点位置
+		}
+
 		select {
 		case fs.eventChan <- e:
 		case <-ctx.Done():
