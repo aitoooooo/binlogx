@@ -114,7 +114,7 @@ func (ep *EventProcessor) producer() {
 			}
 			// 其他错误才记录日志
 			log.Printf("Error reading event: %v\n", err)
-			continue
+			break
 		}
 
 		if event == nil {

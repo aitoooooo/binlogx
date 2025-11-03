@@ -9,6 +9,7 @@ type Event struct {
 	Timestamp    time.Time              `json:"timestamp"`
 	EventType    string                 `json:"event_type"`
 	ServerID     uint32                 `json:"server_id"`
+	LogName      string                 `json:"log_name"` // binlog 文件名
 	LogPos       uint32                 `json:"log_pos"`
 	Database     string                 `json:"database"`
 	Table        string                 `json:"table"`
@@ -29,6 +30,10 @@ type GlobalConfig struct {
 	Action             []string      // 操作类型过滤
 	SlowThreshold      time.Duration // 慢事件处理阈值，默认 50ms
 	EventSizeThreshold int64         // 事件大小阈值（字节），默认 1KiB=1024字节
+
+	// 断点续看
+	StartLogFile string // 起始 binlog 文件
+	StartLogPos  uint32 // 起始 binlog 位置
 
 	// 分库表正则路由
 	SchemaTableRegex []string
