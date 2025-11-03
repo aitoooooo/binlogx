@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -179,6 +180,7 @@ func (fs *FileSource) convertEvent(event *replication.BinlogEvent) (*models.Even
 		EventType: event.Header.EventType.String(),
 		ServerID:  event.Header.ServerID,
 		LogPos:    event.Header.LogPos,
+		LogName:   filepath.Base(fs.filePath), // 从文件路径提取文件名
 		RawData:   event.RawData,
 	}
 

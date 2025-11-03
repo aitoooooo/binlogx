@@ -227,6 +227,8 @@ var parseCmd = &cobra.Command{
 				source = cfg.DBConnection
 			}
 			checkpointMgr = checkpoint.NewManager(source, sourceType)
+		} else if sourceType == "file" {
+			checkpointMgr = checkpoint.NewManager(cfg.Source, sourceType)
 		}
 
 		// 在主线程中交互式显示事件
