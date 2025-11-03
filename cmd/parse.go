@@ -285,13 +285,16 @@ func (ph *streamParseHandler) Flush() error {
 }
 
 // displayEventsStreamingInteractive 交互式显示流式事件，类似 more 命令
-// 显示多个事件后提示用户，按空格显示下一屏
+// 根据事件内容大小动态调整每屏显示的事件数，确保不超过一屏幕
 func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointMgr *checkpoint.Manager) {
-	const pageSize = 10 // 每屏显示 10 个事件
+	const minPageEvents = 1 // 最少每屏显示 1 个事件
+	const maxPageLines = 20 // 每屏最多显示 20 行内容（不含提示）
+
 	reader := bufio.NewReader(os.Stdin)
 	eventCount := 0
 	var lastEvent *models.Event
-	pageEventCount := 0
+	pageLines := 0
+	pageEvents := 0
 
 	for event := range eventChan {
 		if event == nil {
@@ -299,15 +302,20 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 		}
 
 		eventCount++
-		pageEventCount++
 		lastEvent = event // 记录最后一个事件
 
 		// 显示当前事件
 		data, _ := json.MarshalIndent(event, "", "  ")
-		fmt.Printf("\n[Event %d]\n%s\n", eventCount, string(data))
+		eventStr := fmt.Sprintf("\n[Event %d]\n%s\n", eventCount, string(data))
+		fmt.Print(eventStr)
 
-		// 每 pageSize 个事件后，提示用户
-		if pageEventCount >= pageSize {
+		// 计算此事件占用的行数
+		lines := strings.Count(eventStr, "\n")
+		pageLines += lines
+		pageEvents++
+
+		// 如果超过一屏幕，或者已经显示了最少数量的事件且超过行数限制，就提示用户
+		if (pageLines > maxPageLines && pageEvents >= minPageEvents) || pageLines > maxPageLines*2 {
 			fmt.Print("(END) Press SPACE for next, 'q' to quit: ")
 			input, _ := reader.ReadString('\n')
 			input = strings.TrimSpace(input)
@@ -317,7 +325,8 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 				break
 			}
 
-			pageEventCount = 0 // 重置页面事件计数
+			pageLines = 0  // 重置页面行数
+			pageEvents = 0 // 重置页面事件计数
 		}
 	}
 
