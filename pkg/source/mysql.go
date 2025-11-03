@@ -334,19 +334,35 @@ func (ms *MySQLSource) convertEvent(ev *replication.BinlogEvent) *models.Event {
 	case *replication.RowsEvent:
 		// ROWS_EVENT: INSERT/UPDATE/DELETE 等 DML 操作
 		// 需要从之前保存的 TABLE_MAP 中获取表信息
-		if tm, ok := ms.tableMap[e.TableID]; ok {
-			event.Database = string(tm.Schema)
-			event.Table = string(tm.Table)
+		tableMap, ok := ms.tableMap[e.TableID]
+		if !ok {
+			return event // 没有对应的 TABLE_MAP，无法处理
 		}
+
+		event.Database = string(tableMap.Schema)
+		event.Table = string(tableMap.Table)
 
 		// 根据事件类型判断操作
 		switch ev.Header.EventType {
 		case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
 			event.Action = "INSERT"
+			// 对于 INSERT，Rows[0] 是插入的数据
+			if len(e.Rows) > 0 {
+				event.AfterValues = ms.rowToMap(e.Rows[0], tableMap)
+			}
 		case replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
 			event.Action = "UPDATE"
+			// 对于 UPDATE，Rows 成对出现：[before, after, before, after, ...]
+			if len(e.Rows) >= 2 {
+				event.BeforeValues = ms.rowToMap(e.Rows[0], tableMap)
+				event.AfterValues = ms.rowToMap(e.Rows[1], tableMap)
+			}
 		case replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
 			event.Action = "DELETE"
+			// 对于 DELETE，Rows[0] 是被删除的数据
+			if len(e.Rows) > 0 {
+				event.BeforeValues = ms.rowToMap(e.Rows[0], tableMap)
+			}
 		}
 
 	case *replication.TableMapEvent:
@@ -448,4 +464,23 @@ func parsePort(portStr string) uint16 {
 		port = p
 	}
 	return uint16(port)
+}
+
+// rowToMap 将行数据转换为 map
+func (ms *MySQLSource) rowToMap(row []interface{}, tableMap *replication.TableMapEvent) map[string]interface{} {
+	if row == nil || tableMap == nil {
+		return make(map[string]interface{})
+	}
+
+	result := make(map[string]interface{})
+
+	for i, col := range row {
+		if i < int(tableMap.ColumnCount) {
+			// 使用 col_N 格式作为列名（最终会被 CommandHelper 替换为实际列名）
+			colName := fmt.Sprintf("col_%d", i)
+			result[colName] = col
+		}
+	}
+
+	return result
 }
