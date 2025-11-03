@@ -148,7 +148,7 @@ Total Events: 1234567
 
 ### parse - 交互式浏览
 
-逐个显示 binlog 事件详情，支持交互式控制
+逐个显示 binlog 事件详情，支持交互式控制和断点续看
 
 ```bash
 binlogx parse [options]
@@ -157,12 +157,54 @@ binlogx parse [options]
 **特性**：
 - 流式输出：事件一经解析即刻显示，无需等待完整文件处理
 - 交互式分页：每个事件显示后等待用户操作
+- 断点续看：自动保存和恢复浏览位置
 - 实时列名映射：通过 `--db-connection` 将列名 `col_N` 映射为实际名称
 - 完整事件信息：JSON 格式输出，包含所有元数据和生成的 SQL
 
 **交互方式**：
 - 按 `空格` 或 `Enter` 显示下一个事件
 - 按 `q` 退出浏览
+
+**断点续看机制**：
+
+当浏览完成后退出（按 `q`），系统会自动保存当前位置到 `~/.binlogx/checkpoints/` 目录。下次运行同样的 parse 命令时：
+1. 系统检测到已保存的断点
+2. 提示用户是否从上次位置继续（`y/n，默认y`）
+3. 若选择 `y`，从上次位置之后的事件开始显示
+4. 若选择 `n`，从头开始读取并清除旧断点
+
+**示例**：
+
+```bash
+# 第一次浏览，查看一部分事件后按 q 退出
+$ binlogx parse --source /path/to/binlog.000001
+[Event 1]
+...
+[Event 100]
+Press SPACE/Enter for next, 'q' to quit: q
+正在退出...
+断点已保存: mysql-bin.000786:50000
+总共显示事件数: 100
+
+# 第二次运行会自动提示加载断点
+$ binlogx parse --source /path/to/binlog.000001
+找到上次的断点位置:
+  文件: mysql-bin.000786
+  位置: 50000
+  时间: 2025-11-03 11:00:00
+
+是否从断点继续？(y/n，默认y): y
+从断点继续: mysql-bin.000786:50000
+
+[Event 101]
+...
+```
+
+**断点文件位置**：
+- 离线文件模式：`~/.binlogx/checkpoints/file_<hash>.json`
+- 在线 MySQL 模式：`~/.binlogx/checkpoints/mysql_<hash>.json`
+
+其中 `<hash>` 是数据源路径或 DSN 的哈希值。
 
 ### sql - 生成前向 SQL
 

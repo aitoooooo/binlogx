@@ -76,6 +76,19 @@ binlogx stat --source /path/to/binlog.000001 \
 binlogx parse --source /path/to/binlog.000001
 ```
 
+**断点续看功能**：parse 命令支持断点保存和恢复，您可以中断浏览后继续查看：
+
+```bash
+# 第一次运行，浏览一些事件后按 q 退出
+binlogx parse --source /path/to/binlog.000001
+
+# 第二次运行时会自动加载上次的断点位置并询问是否继续
+binlogx parse --source /path/to/binlog.000001
+# 输出：找到上次的断点位置，是否从断点继续？(y/n，默认y)
+```
+
+断点保存位置为 `~/.binlogx/checkpoints/` 目录。
+
 ### 生成前向 SQL
 
 ```bash
