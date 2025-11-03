@@ -232,14 +232,14 @@ func (fs *FileSource) parseRowsEvent(event *models.Event, e *replication.RowsEve
 
 	// 解析列和值
 	if len(e.Rows) > 0 {
-		event.AfterValues = fs.rowToMap(e.Rows[0], e.Table)
+		event.AfterValues = fs.rowToMap(e.Rows[0], e)
 		if len(e.Rows) > 1 && event.Action == "UPDATE" {
-			event.BeforeValues = fs.rowToMap(e.Rows[1], e.Table)
+			event.BeforeValues = fs.rowToMap(e.Rows[1], e)
 		} else if len(e.Rows) > 1 && (event.Action == "DELETE" || event.Action == "UPDATE") {
 			// For DELETE and UPDATE, first row might be the before image
-			event.BeforeValues = fs.rowToMap(e.Rows[0], e.Table)
+			event.BeforeValues = fs.rowToMap(e.Rows[0], e)
 			if len(e.Rows) > 1 {
-				event.AfterValues = fs.rowToMap(e.Rows[1], e.Table)
+				event.AfterValues = fs.rowToMap(e.Rows[1], e)
 			}
 		}
 	}
@@ -248,20 +248,65 @@ func (fs *FileSource) parseRowsEvent(event *models.Event, e *replication.RowsEve
 }
 
 // rowToMap 将行数据转换为 map
-func (fs *FileSource) rowToMap(row []interface{}, tableMap *replication.TableMapEvent) map[string]interface{} {
-	if row == nil || tableMap == nil {
+// 注意：RowsEvent.Rows 中的数据可能不包含所有列（有跳过的列）
+// 我们使用索引位置作为列号，然后由 CommandHelper.MapColumnNames 来映射实际列名
+func (fs *FileSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEvent) map[string]interface{} {
+	if row == nil || rowsEvent == nil || rowsEvent.Table == nil {
 		return make(map[string]interface{})
 	}
 
 	result := make(map[string]interface{})
 
-	for i, col := range row {
-		if i < int(tableMap.ColumnCount) {
-			// 获取列名（暂时使用 col_N，因为 go-mysql 不提供列名）
-			colName := fmt.Sprintf("col_%d", i)
-			result[colName] = col
+	// 如果有跳过的列，需要根据 SkippedColumns 来映射真实列号
+	// SkippedColumns[i] 包含的是被跳过的列号，row[i] 对应的真实列号需要计算
+	if len(rowsEvent.SkippedColumns) > 0 && len(rowsEvent.SkippedColumns) > len(row) {
+		// 有跳过的列，需要重新计算列号
+		includedCols := getIncludedColumnsForBinlog(int(rowsEvent.Table.ColumnCount), rowsEvent.SkippedColumns)
+		for i, col := range row {
+			if i < len(includedCols) {
+				colName := fmt.Sprintf("col_%d", includedCols[i])
+				result[colName] = col
+			}
+		}
+	} else {
+		// 没有跳过的列，直接使用索引作为列号
+		for i, col := range row {
+			if i < int(rowsEvent.Table.ColumnCount) {
+				colName := fmt.Sprintf("col_%d", i)
+				result[colName] = col
+			}
 		}
 	}
 
 	return result
+}
+
+// getIncludedColumnsForBinlog 根据跳过的列计算包含的列号列表
+func getIncludedColumnsForBinlog(totalColumns int, skippedColumns [][]int) []int {
+	if len(skippedColumns) == 0 {
+		// 所有列都包含
+		cols := make([]int, totalColumns)
+		for i := 0; i < totalColumns; i++ {
+			cols[i] = i
+		}
+		return cols
+	}
+
+	// 构建跳过列的集合
+	skipped := make(map[int]bool)
+	for _, skipList := range skippedColumns {
+		for _, col := range skipList {
+			skipped[col] = true
+		}
+	}
+
+	// 收集包含的列号
+	var included []int
+	for i := 0; i < totalColumns; i++ {
+		if !skipped[i] {
+			included = append(included, i)
+		}
+	}
+
+	return included
 }

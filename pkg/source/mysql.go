@@ -348,20 +348,20 @@ func (ms *MySQLSource) convertEvent(ev *replication.BinlogEvent) *models.Event {
 			event.Action = "INSERT"
 			// 对于 INSERT，Rows[0] 是插入的数据
 			if len(e.Rows) > 0 {
-				event.AfterValues = ms.rowToMap(e.Rows[0], tableMap)
+				event.AfterValues = ms.rowToMap(e.Rows[0], e)
 			}
 		case replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
 			event.Action = "UPDATE"
 			// 对于 UPDATE，Rows 成对出现：[before, after, before, after, ...]
 			if len(e.Rows) >= 2 {
-				event.BeforeValues = ms.rowToMap(e.Rows[0], tableMap)
-				event.AfterValues = ms.rowToMap(e.Rows[1], tableMap)
+				event.BeforeValues = ms.rowToMap(e.Rows[0], e)
+				event.AfterValues = ms.rowToMap(e.Rows[1], e)
 			}
 		case replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
 			event.Action = "DELETE"
 			// 对于 DELETE，Rows[0] 是被删除的数据
 			if len(e.Rows) > 0 {
-				event.BeforeValues = ms.rowToMap(e.Rows[0], tableMap)
+				event.BeforeValues = ms.rowToMap(e.Rows[0], e)
 			}
 		}
 
@@ -466,19 +466,34 @@ func parsePort(portStr string) uint16 {
 	return uint16(port)
 }
 
-// rowToMap 将行数据转换为 map
-func (ms *MySQLSource) rowToMap(row []interface{}, tableMap *replication.TableMapEvent) map[string]interface{} {
-	if row == nil || tableMap == nil {
+// rowToMap 将行数据转换�� map
+// 注意：RowsEvent.Rows 中的数据可能不包含所有列（有跳过的列）
+// 我们使用索引位置作为列号，然后由 CommandHelper.MapColumnNames 来映射实际列名
+func (ms *MySQLSource) rowToMap(row []interface{}, rowsEvent *replication.RowsEvent) map[string]interface{} {
+	if row == nil || rowsEvent == nil || rowsEvent.Table == nil {
 		return make(map[string]interface{})
 	}
 
 	result := make(map[string]interface{})
 
-	for i, col := range row {
-		if i < int(tableMap.ColumnCount) {
-			// 使用 col_N 格式作为列名（最终会被 CommandHelper 替换为实际列名）
-			colName := fmt.Sprintf("col_%d", i)
-			result[colName] = col
+	// 如果有跳过的列，需要根�� SkippedColumns 来映射真实列号
+	// SkippedColumns[i] 包含的是被跳过的列号，row[i] 对应的真实列号需要计算
+	if len(rowsEvent.SkippedColumns) > 0 && len(rowsEvent.SkippedColumns) > len(row) {
+		// 有跳过的列，需要重新计算列号
+		includedCols := getIncludedColumnsForBinlog(int(rowsEvent.Table.ColumnCount), rowsEvent.SkippedColumns)
+		for i, col := range row {
+			if i < len(includedCols) {
+				colName := fmt.Sprintf("col_%d", includedCols[i])
+				result[colName] = col
+			}
+		}
+	} else {
+		// 没有跳��的列，直接使用索引作为列号
+		for i, col := range row {
+			if i < int(rowsEvent.Table.ColumnCount) {
+				colName := fmt.Sprintf("col_%d", i)
+				result[colName] = col
+			}
 		}
 	}
 
