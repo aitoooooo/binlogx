@@ -261,9 +261,19 @@ var exportCmd = &cobra.Command{
 		// 创建数据源
 		var ds source.DataSource
 		if cfg.Source != "" {
-			ds = source.NewFileSource(cfg.Source)
+			fileSource := source.NewFileSource(cfg.Source)
+			// 设置时间范围过滤
+			if !cfg.StartTime.IsZero() || !cfg.EndTime.IsZero() {
+				fileSource.SetTimeRange(cfg.StartTime, cfg.EndTime)
+			}
+			ds = fileSource
 		} else {
-			ds = source.NewMySQLSource(cfg.DBConnection)
+			mysqlSource := source.NewMySQLSource(cfg.DBConnection)
+			// 设置时间范围过滤
+			if !cfg.StartTime.IsZero() || !cfg.EndTime.IsZero() {
+				mysqlSource.SetTimeRange(cfg.StartTime, cfg.EndTime)
+			}
+			ds = mysqlSource
 		}
 
 		// 打开数据源
@@ -318,9 +328,19 @@ var exportCmd = &cobra.Command{
 			// 重新打开数据源用于实际导出
 			ds.Close()
 			if cfg.Source != "" {
-				ds = source.NewFileSource(cfg.Source)
+				fileSource := source.NewFileSource(cfg.Source)
+				// 设置时间范围过滤
+				if !cfg.StartTime.IsZero() || !cfg.EndTime.IsZero() {
+					fileSource.SetTimeRange(cfg.StartTime, cfg.EndTime)
+				}
+				ds = fileSource
 			} else {
-				ds = source.NewMySQLSource(cfg.DBConnection)
+				mysqlSource := source.NewMySQLSource(cfg.DBConnection)
+				// 设置时间范围过滤
+				if !cfg.StartTime.IsZero() || !cfg.EndTime.IsZero() {
+					mysqlSource.SetTimeRange(cfg.StartTime, cfg.EndTime)
+				}
+				ds = mysqlSource
 			}
 			if err := ds.Open(cmd.Context()); err != nil {
 				return err

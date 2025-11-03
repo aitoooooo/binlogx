@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aitoooooo/binlogx/pkg/models"
@@ -33,6 +34,11 @@ type MySQLSource struct {
 
 	// 当前正在读取的 binlog 文件名
 	currentLogName string
+
+	// 时间范围过滤
+	startTime time.Time
+	endTime   time.Time
+	mu        sync.RWMutex
 }
 
 // NewMySQLSource 创建 MySQL 数据源
@@ -47,6 +53,14 @@ func NewMySQLSource(dsn string) *MySQLSource {
 func (ms *MySQLSource) SetStartPosition(file string, pos uint32) {
 	ms.startFile = file
 	ms.startPos = pos
+}
+
+// SetTimeRange 设置时间范围过滤
+func (ms *MySQLSource) SetTimeRange(start, end time.Time) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.startTime = start
+	ms.endTime = end
 }
 
 // Open 连接到 MySQL
@@ -322,6 +336,23 @@ func (ms *MySQLSource) convertEvent(ev *replication.BinlogEvent) *models.Event {
 		ServerID:  ev.Header.ServerID,
 		LogName:   ms.currentLogName, // 填充当前 binlog 文件名
 		LogPos:    ev.Header.LogPos,
+	}
+
+	// 检查时间范围
+	ms.mu.RLock()
+	startTime := ms.startTime
+	endTime := ms.endTime
+	ms.mu.RUnlock()
+
+	// 如果事件时间早于开始时间，跳过
+	if !startTime.IsZero() && timestamp.Before(startTime) {
+		return nil
+	}
+
+	// 如果事件时间晚于结束时间，标记为 EOF 并返回 nil
+	if !endTime.IsZero() && timestamp.After(endTime) {
+		ms.eof = true
+		return nil
 	}
 
 	// 根据事件类型提取具体信息
