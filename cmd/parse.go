@@ -284,11 +284,14 @@ func (ph *streamParseHandler) Flush() error {
 	return nil
 }
 
-// displayEventsStreamingInteractive 交互式显示流式事件，逐个输出，按空格继续
+// displayEventsStreamingInteractive 交互式显示流式事件，类似 more 命令
+// 显示多个事件后提示用户，按空格显示下一屏
 func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointMgr *checkpoint.Manager) {
+	const pageSize = 10 // 每屏显示 10 个事件
 	reader := bufio.NewReader(os.Stdin)
 	eventCount := 0
 	var lastEvent *models.Event
+	pageEventCount := 0
 
 	for event := range eventChan {
 		if event == nil {
@@ -296,20 +299,25 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 		}
 
 		eventCount++
+		pageEventCount++
 		lastEvent = event // 记录最后一个事件
 
 		// 显示当前事件
 		data, _ := json.MarshalIndent(event, "", "  ")
 		fmt.Printf("\n[Event %d]\n%s\n", eventCount, string(data))
 
-		// 提示用户，等待空格继续
-		fmt.Print("Press SPACE/Enter for next, 'q' to quit: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		// 每 pageSize 个事件后，提示用户
+		if pageEventCount >= pageSize {
+			fmt.Print("(END) Press SPACE for next, 'q' to quit: ")
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(input)
 
-		if input == "q" || input == "Q" {
-			fmt.Println("正在退出...")
-			break
+			if input == "q" || input == "Q" {
+				fmt.Println("正在退出...")
+				break
+			}
+
+			pageEventCount = 0 // 重置页面事件计数
 		}
 	}
 
@@ -322,9 +330,9 @@ func displayEventsStreamingInteractive(eventChan chan *models.Event, checkpointM
 			lastEvent.Database,
 			lastEvent.Table,
 		); err != nil {
-			fmt.Fprintf(os.Stderr, "\n警告: 保存断点失败: %v\n", err)
+			fmt.Fprintf(os.Stderr, "警告: 保存断点失败: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "\n断点已保存: %s:%d\n", lastEvent.LogName, lastEvent.LogPos)
+			fmt.Fprintf(os.Stderr, "断点已保存: %s:%d\n", lastEvent.LogName, lastEvent.LogPos)
 		}
 	}
 
